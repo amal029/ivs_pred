@@ -401,6 +401,8 @@ def keras_model_fit(model, trainX, trainY, valX, valY, batch_size):
 
 def convlstm_predict():
     NIMAGES1 = 2000
+    # XXX: This is very important. If too long then changes are not
+    # shown. If too short then too much influence from previous lags.
     TSTEPS = 5
     START = 0
 
