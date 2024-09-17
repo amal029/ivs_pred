@@ -31,13 +31,13 @@ def load_image(num, dd='./figs'):
 def main():
     # XXX: Important date: 20201014
 
-    START = date_to_num('20201014')
+    START = date_to_num('20221014')
     print("START:", START)
-    NIMAGES = 30
+    NIMAGES = 40
 
     # XXX: Load the test dataset
     pred.TSTEPS = 5
-    bs = 5
+    bs = 50
     nf = 64
 
     valX, valY, Ydates = pred.load_data_for_keras(START=START,

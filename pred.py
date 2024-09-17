@@ -5,15 +5,25 @@ import os
 import fnmatch
 import zipfile as zip
 from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import Lasso, Ridge, ElasticNet
+from sklearn.multioutput import MultiOutputRegressor
+from sklearn.ensemble import RandomForestRegressor
+# import tensorflow.math as K
+# import tensorflow as tf
+import xgboost as xgb
 import numpy as np
 from keras.preprocessing.image import load_img, img_to_array
 import glob
-from keras.layers import Input, ConvLSTM2D, BatchNormalization, Conv3D
+from keras.layers import Input, ConvLSTM2D, BatchNormalization, Conv2D
 from keras.models import Model
+from sklearn.metrics import root_mean_squared_error
+from sklearn.metrics import mean_absolute_percentage_error
+from sklearn.metrics import r2_score
 import keras
 # from PIL import Image
 # XXX: For plotting only
 import matplotlib.pyplot as plt
+# from sklearn.linear_model import SGDRegressor
 
 # XXX: Moneyness Bounds inclusive
 LM = 0.9
@@ -86,7 +96,7 @@ def plot_ivs(ivs_surface, IVS='IVS', view='XY'):
             Z = ivs_surface[k][IVS]*100
         else:
             Z = ivs_surface[k][IVS]
-        # viridis = cm.get_cmap('gist_gray', 256)
+            # viridis = cm.get_cmap('gist_gray', 256)
         _ = ax.plot_trisurf(X, Y, Z, cmap='afmhot',
                             linewidth=0.2, antialiased=True)
         # ax.set_xlabel('m')
@@ -101,14 +111,14 @@ def plot_ivs(ivs_surface, IVS='IVS', view='XY'):
             ax.view_init(elev=0, azim=-90)
         elif view == 'YZ':
             ax.view_init(elev=0, azim=0)
-        ax.axis('off')
-        # ax.zaxis.set_major_formatter('{x:.02f}')
-        # fig.colorbar(surf, shrink=0.5, aspect=5)
-        # plt.show()
-        # fig.subplots_adjust(bottom=0)
-        # fig.subplots_adjust(top=0.00001)
-        # fig.subplots_adjust(right=1)
-        # fig.subplots_adjust(left=0)
+            ax.axis('off')
+            # ax.zaxis.set_major_formatter('{x:.02f}')
+            # fig.colorbar(surf, shrink=0.5, aspect=5)
+            # plt.show()
+            # fig.subplots_adjust(bottom=0)
+            # fig.subplots_adjust(top=0.00001)
+            # fig.subplots_adjust(right=1)
+            # fig.subplots_adjust(left=0)
         plt.savefig('/tmp/figs/{k}_{v}.png'.format(k=k, v=view),
                     bbox_inches='tight', pad_inches=0)
         plt.close(fig)
@@ -218,8 +228,8 @@ def main(mdir, years, months, instrument, dfs: dict):
                 tosearch = "*_{y}_{m}*.zip".format(y=y, m=m)
                 if fnmatch.fnmatch(f, tosearch):
                     ff += [f]
-    # print(ff)
-    # XXX: Read the csvs
+                    # print(ff)
+                    # XXX: Read the csvs
     for f in ff:
         z = zip.ZipFile(mdir+f)
         ofs = [i for i in z.namelist() if 'options_' in i]
@@ -315,14 +325,17 @@ def excel_to_images():
         build_gird_and_images(df)
 
 
-def build_keras_model(shape, inner_filters, LR=1e-3):
-    inp = Input(shape=shape[1:])
+def build_keras_model(shape, inner_filters, bs, LR=1e-3):
+    inp = Input(shape=shape[1:], batch_size=bs)
     x = ConvLSTM2D(
         filters=32,
         kernel_size=(7, 7),
         padding="same",
         data_format='channels_last',
         activation='relu',
+        # dropout=0.2,
+        # recurrent_dropout=0.1,
+        # stateful=True,
         return_sequences=True)(inp)
     x = BatchNormalization()(x)
     x = ConvLSTM2D(
@@ -330,7 +343,10 @@ def build_keras_model(shape, inner_filters, LR=1e-3):
         kernel_size=(5, 5),
         data_format='channels_last',
         padding='same',
+        # dropout=0.2,
+        # recurrent_dropout=0.1,
         activation='relu',
+        # stateful=True,
         return_sequences=True)(x)
     x = BatchNormalization()(x)
     x = ConvLSTM2D(
@@ -338,7 +354,10 @@ def build_keras_model(shape, inner_filters, LR=1e-3):
         kernel_size=(3, 3),
         data_format='channels_last',
         padding='same',
+        # dropout=0.2,
+        # recurrent_dropout=0.1,
         activation='relu',
+        # stateful=True,
         return_sequences=True)(x)
     x = BatchNormalization()(x)
     x = ConvLSTM2D(
@@ -346,31 +365,49 @@ def build_keras_model(shape, inner_filters, LR=1e-3):
         kernel_size=(1, 1),
         data_format='channels_last',
         padding='same',
+        # dropout=0.1,
+        # recurrent_dropout=0.1,
         activation='relu',
-        return_sequences=True)(x)
+        # stateful=True
+        )(x)
     # XXX: 3D layer for images, 1 for each timestep
-    x = Conv3D(
-        filters=1, kernel_size=(3, 3, 3), activation="relu",
+    x = Conv2D(
+        filters=1, kernel_size=(1, 1), activation="relu",
         padding="same")(x)
     # XXX: Take the average in depth
-    x = keras.layers.AveragePooling3D(pool_size=(shape[1], 1, 1),
-                                      padding='same',
-                                      data_format='channels_last')(x)
+    # x = keras.layers.AveragePooling3D(pool_size=(shape[1], 1, 1),
+    #                                   padding='same',
+    #                                   data_format='channels_last')(x)
     # XXX: Flatten the output
     # x = keras.layers.Flatten()(x)
     # # XXX: Dense layer for 1 output image
     # tot = 1
     # for i in shape[2:]:
     #     tot *= i
-    # print('TOT:', tot)
+    # # print('TOT:', tot)
     # x = keras.layers.Dense(units=tot, activation='relu')(x)
+
     # # XXX: Reshape the output
     x = keras.layers.Reshape(shape[2:4])(x)
 
     # XXX: The complete model and compiled
     model = Model(inp, x)
     model.compile(loss=keras.losses.mean_squared_error,
-                  optimizer=keras.optimizers.Adam(learning_rate=LR),)
+                  optimizer=keras.optimizers.Adam(learning_rate=LR))
+
+    # def loss(ytrue, ypred):
+    #     ytrue = tf.reshape(ytrue, (ytrue.shape[0],
+    #                                ytrue.shape[1]*ytrue.shape[2]))
+    #     ypred = tf.reshape(ypred, (ypred.shape[0],
+    #                                ypred.shape[1]*ypred.shape[2]))
+    #     num = K.reduce_sum(K.square(ytrue-ypred), axis=-1)
+    #     den = K.reduce_sum(K.square(ytrue - K.reduce_mean(ytrue)),
+    #                        axis=-1)
+    #     res = 1 - (num/den)
+    #     return (-res)
+
+    # model.compile(loss=loss,
+    #               optimizer=keras.optimizers.Adam(learning_rate=LR))
     return model
 
 
@@ -383,7 +420,7 @@ def keras_model_fit(model, trainX, trainY, valX, valY, batch_size):
                                                   patience=5)
 
     # Define modifiable training hyperparameters.
-    epochs = 50
+    epochs = 500
     # batch_size = 2
 
     # Fit the model to the training data.
@@ -399,42 +436,177 @@ def keras_model_fit(model, trainX, trainY, valX, valY, batch_size):
     return history
 
 
-def convlstm_predict():
+def load_data(TSTEPS=10):
     NIMAGES1 = 2000
     # XXX: This is very important. If too long then changes are not
     # shown. If too short then too much influence from previous lags.
-    TSTEPS = 5
+    TSTEPS = TSTEPS
     START = 0
 
     # Load, process and learn a ConvLSTM2D network
     trainX, trainY, _ = load_data_for_keras(START=START, NUM_IMAGES=NIMAGES1,
                                             TSTEP=TSTEPS)
-    print(trainX.shape, trainY.shape)
+    # print(trainX.shape, trainY.shape)
     trainX = trainX.reshape(trainX.shape[0]//TSTEPS, TSTEPS,
                             *trainX.shape[1:], 1)
     # trainY = trainY.reshape(trainY.shape[0]//TSTEPS, TSTEPS,
     #                         *trainY.shape[1:])
-    print(trainX.shape, trainY.shape)
+    # print(trainX.shape, trainY.shape)
 
     NIMAGES2 = 1000
-    START = NIMAGES1
+    START = START+NIMAGES1
 
     valX, valY, _ = load_data_for_keras(START=START, NUM_IMAGES=NIMAGES2,
                                         TSTEP=TSTEPS)
-    print(valX.shape, valY.shape)
+    # print(valX.shape, valY.shape)
     valX = valX.reshape(valX.shape[0]//TSTEPS, TSTEPS, *valX.shape[1:], 1)
     # valY = valY.reshape(valY.shape[0]//TSTEPS, TSTEPS, *valY.shape[1:])
-    print(valX.shape, valY.shape)
+    # print(valX.shape, valY.shape)
+    return (trainX, trainY, valX, valY, TSTEPS)
+
+
+def plot_predicted_outputs_reg(vY, vYP, TSTEPS):
+
+    def num_to_date(num, dd='./figs'):
+        ff = sorted(glob.glob(dd+'/*.npy'))
+        return ff[num].split('/')[-1].split('.')[0]
+
+    # XXX: The moneyness
+    MS = np.arange(LM, UM+MSTEP, MSTEP)
+    # XXX: The term structure
+    TS = np.array([i/DAYS
+                   for i in
+                   range(LT, UT+TSTEP, TSTEP)])
+    # XXX: Reshape the outputs
+    vY = vY.reshape(vY.shape[0], len(MS), len(TS))
+    vYP = vYP.reshape(vYP.shape[0], len(MS), len(TS))
+    print(vY.shape, vYP.shape)
+
+    for i in range(vY.shape[0]):
+        y = vY[i]*100
+        yp = vYP[i]*100
+        fig, axs = plt.subplots(1, 2,
+                                subplot_kw=dict(projection='3d'))
+        axs[0].title.set_text('Truth')
+        # XXX: Make the y dataframe
+        ydf = list()
+        for cm, m in enumerate(MS):
+            for ct, t in enumerate(TS):
+                ydf.append([m, t, y[cm, ct]])
+        ydf = np.array(ydf)
+        axs[0].plot_trisurf(ydf[:, 0], ydf[:, 1], ydf[:, 2],
+                            cmap='afmhot', linewidth=0.2,
+                            antialiased=True)
+        axs[0].set_xlabel('Moneyness')
+        axs[0].set_ylabel('Term structure')
+        axs[0].set_zlabel('Vol %')
+        axs[1].title.set_text('Predicted')
+        ypdf = list()
+        for cm, m in enumerate(MS):
+            for ct, t in enumerate(TS):
+                ypdf.append([m, t, yp[cm, ct]])
+        ypdf = np.array(ypdf)
+        axs[1].plot_trisurf(ypdf[:, 0], ypdf[:, 1], ypdf[:, 2],
+                            cmap='afmhot', linewidth=0.2,
+                            antialiased=True)
+        axs[1].set_xlabel('Moneyness')
+        axs[1].set_ylabel('Term structure')
+        axs[1].set_zlabel('Vol %')
+
+        plt.show()
+        plt.close()
+
+
+def regression_predict(model='Ridge', TSTEPS=10):
+    # XXX: We will need to do steps 2, 3, 5, and 10
+    tX, tY, vX, vY, lags = load_data(TSTEPS)
+    tX = tX.reshape(tX.shape[:-1])
+    vX = vX.reshape(vX.shape[:-1])
+    # tX = np.append(tX, vX, axis=0)
+    # tY = np.append(tY, vY, axis=0)
+    print('tX, tY: ', tX.shape, tY.shape)
+    tX = tX.reshape(tX.shape[0], tX.shape[1]*tX.shape[2]*tX.shape[3])
+    tY = tY.reshape(tY.shape[0], tY.shape[1]*tY.shape[2])
+    print('tX, tY:', tX.shape, tY.shape)
+
+    # XXX: Validation set
+    vX = vX.reshape(vX.shape[0], vX.shape[1]*vX.shape[2]*vX.shape[3])
+    vY = vY.reshape(vY.shape[0], vY.shape[1]*vY.shape[2])
+    print('vX, vY:', vX.shape, vY.shape)
+
+    # XXX: Intercept?
+    intercept = True
+
+    # XXX: Make a LinearRegression
+    if model == 'Lasso':
+        treg = 'lasso'  # overfits
+        reg = Lasso(fit_intercept=intercept, alpha=1,
+                    selection='random')
+
+    if model == 'Ridge':        # gives the best results
+        treg = 'ridge'
+        reg = Ridge(fit_intercept=intercept, alpha=1)
+
+    if model == 'OLS':
+        treg = 'linear'
+        reg = LinearRegression(fit_intercept=intercept, n_jobs=-1)
+
+    if model == 'ElasticNet':
+        treg = 'enet'               # overfits
+        reg = ElasticNet(fit_intercept=intercept, alpha=1,
+                         selection='random')
+
+    if model == 'RF':
+        treg = 'rf'
+        reg = RandomForestRegressor(n_jobs=10, max_features='sqrt',
+                                    n_estimators=100,
+                                    bootstrap=False, verbose=1)
+
+    if model == 'XGBoost':
+        treg = 'xgboost'
+        reg = MultiOutputRegressor(
+            xgb.XGBRegressor(n_jobs=12,
+                             tree_method='hist',
+                             multi_strategy='multi_output_tree',
+                             n_estimators=100,
+                             verbosity=2))
+
+    reg.fit(tX, tY)
+    print('Train set R2: ', reg.score(tX, tY))
+
+    # XXX: Predict (Validation)
+    vYP = reg.predict(vX)
+    print(vY.shape, vYP.shape)
+    rmses = root_mean_squared_error(vY, vYP, multioutput='raw_values')
+    mapes = mean_absolute_percentage_error(vY, vYP, multioutput='raw_values')
+    r2sc = r2_score(vY, vYP, multioutput='raw_values')
+    print('RMSE mean: ', np.mean(rmses), 'RMSE std-dev: ', np.std(rmses))
+    print('MAPE mean: ', np.mean(mapes), 'MAPE std-dev: ', np.std(mapes))
+    print('R2 score mean:', np.mean(r2sc), 'R2 score std-dev: ', np.std(r2sc))
+
+    # XXX: Plot some outputs
+    # plot_predicted_outputs_reg(vY, vYP, TSTEPS)
+
+    # XXX: Save the model
+    import pickle
+    with open('model_%s_ts_%s.pkl' % (treg, lags), 'wb') as f:
+        pickle.dump(reg, f)
+
+
+def convlstm_predict():
+    TSTEPS = 20
+    trainX, trainY, valX, valY, _ = load_data(TSTEPS=TSTEPS)
 
     # XXX: Inner number of filters
     inner_filters = 64
 
+    # XXX: Now fit the model
+    batch_size = 20
+
     # XXX: Now build the keras model
-    model = build_keras_model(trainX.shape, inner_filters)
+    model = build_keras_model(trainX.shape, inner_filters, batch_size)
     print(model.summary())
 
-    # XXX: Now fit the model
-    batch_size = 5
     history = keras_model_fit(model, trainX, trainY, valX, valY, batch_size)
 
     # XXX: Save the model after training
@@ -455,4 +627,9 @@ def convlstm_predict():
 if __name__ == '__main__':
     # XXX: Excel data to images
     # excel_to_images()
+
+    # XXX: ConvLSTM2D prediction
     convlstm_predict()
+
+    # Normal regression prediction
+    # regression_predict(model='Lasso', TSTEPS=5)
