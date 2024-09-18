@@ -8,6 +8,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.linear_model import Lasso, Ridge, ElasticNet
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.ensemble import RandomForestRegressor
+from statsmodels.nonparametric.kernel_regression import KernelReg
 # import tensorflow.math as K
 # import tensorflow as tf
 import xgboost as xgb
@@ -66,24 +67,9 @@ def preprocess_ivs_df(dfs: dict):
     return toret
 
 
-def plot_hmap(ivs_hmap, mrows, tcols):
+def plot_hmap(ivs_hmap, mrows, tcols, dd='figs'):
     for k in ivs_hmap.keys():
-        # fig, ax = plt.subplots()
-        # plt.axis('off')
-        # print(ivs_hmap[k]/ivs_hmap[k].max())
-        # ax.set_xlabel(mrows)
-        # ax.set_ylabel(tcols)
-        np.save('/tmp/figs/%s.npy' % k, ivs_hmap[k])
-        # print(ivs_hmap[k].shape)
-        # print(ivs_hmap[k])
-        # plt.imshow(ivs_hmap[k], cmap='afmhot', interpolation='none')
-        # extent = ax.get_window_extent().transformed(
-        #     fig.dpi_scale_trans.inverted())
-        # plt.savefig('/tmp/figs/{k}_hmap.png'.format(k=k),
-        #             bbox_inches='tight', pad_inches=0)
-        # plt.show()
-        # plt.close(fig)
-        # break
+        np.save('/tmp/%s/%s.npy' % (dd, k), ivs_hmap[k])
 
 
 def plot_ivs(ivs_surface, IVS='IVS', view='XY'):
@@ -244,6 +230,64 @@ def main(mdir, years, months, instrument, dfs: dict):
             dfs[key] = df
 
 
+def build_gird_and_images_gaussian(df):
+    # print('building grid and fitting')
+    # XXX: Now fit a multi-variate linear regression to the dataset
+    # one for each day.
+    df = dict(sorted(df.items()))
+    fitted_dict = dict()
+    grid = dict()
+    scores = list()
+    for k in df.keys():
+        # print('doing key: ', k)
+        y = df[k]['IV']
+        X = df[k][['m', 'tau']]
+        # print('fitting')
+        reg = KernelReg(endog=y, exog=X, var_type='cc',
+                        reg_type='lc')
+        # reg.fit()               # fit the model
+        # print('fitted')
+        fitted_dict[k] = reg
+        scores += [reg.r_squared()]
+        # XXX: Now make the grid
+        ss = []
+        mms = np.arange(LM, UM+MSTEP, MSTEP)
+        tts = [i/DAYS for i in range(LT, UT+TSTEP, TSTEP)]
+        # print('making grid: ', len(mms), len(tts))
+        for mm in mms:
+            for tt in tts:
+                # XXX: Make the feature vector
+                ss.append([mm, tt])
+
+        grid[k] = pd.DataFrame(ss, columns=['m', 'tau'])
+        # print('made grid and output')
+
+    print("average fit score: ", sum(scores)/len(scores))
+    # XXX: Now make the smooth ivs surface for each day
+    ivs_surf_hmap = dict()
+    ivs_surface = dict()
+    for k in grid.keys():
+        # XXX: This ivs goes m1,t1;m1,t2... then
+        # m2,t1;m2,t2,m2,t3.... this is why reshape for heat map as
+        # m, t, so we get m rows and t cols. Hence, x-axis is t and
+        # y-axis is m.
+        pivs, _ = fitted_dict[k].fit(grid[k])
+        ivs_surface[k] = pd.DataFrame({'IVS': pivs,
+                                       'm': grid[k]['m'],
+                                       'tau': grid[k]['tau']})
+        ivs_surface[k]['IVS'] = ivs_surface[k]['IVS']
+        # print('IVS len:', len(ivs_surface[k]['IVS']))
+        mcount = len(mms)
+        tcount = len(tts)
+        # print('mcount%s, tcount%s: ' % (mcount, tcount))
+        ivs_surf_hmap[k] = ivs_surface[k]['IVS'].values.reshape(mcount,
+                                                                tcount)
+        # print('ivs hmap shape: ', ivs_surf_hmap[k].shape)
+
+    # XXX: Plot the heatmap
+    plot_hmap(ivs_surf_hmap, mms, tts, dd='gfigs')
+
+
 def build_gird_and_images(df):
     # print('building grid and fitting')
     # XXX: Now fit a multi-variate linear regression to the dataset
@@ -304,7 +348,7 @@ def build_gird_and_images(df):
     # plot_ivs(ivs_surface, view='XY')
 
 
-def excel_to_images():
+def excel_to_images(dvf=True):
     dir = '../../HistoricalOptionsData/'
     years = [str(i) for i in range(2011, 2024)]
     months = ['January', 'February',  'March', 'April', 'May', 'June', 'July',
@@ -321,8 +365,12 @@ def excel_to_images():
         # XXX: Now make ivs surface for each instrument
         df = preprocess_ivs_df(dfs)
 
-        # XXX: Build the images
-        build_gird_and_images(df)
+        if dvf:
+            # XXX: Build the 2d matrix with DVF
+            build_gird_and_images(df)
+        else:
+            # XXX: Build the 2d matrix with NW
+            build_gird_and_images_gaussian(df)
 
 
 def build_keras_model(shape, inner_filters, bs, LR=1e-3):
@@ -436,7 +484,7 @@ def keras_model_fit(model, trainX, trainY, valX, valY, batch_size):
     return history
 
 
-def load_data(TSTEPS=10):
+def load_data(dd='./figs', TSTEPS=10):
     NIMAGES1 = 2000
     # XXX: This is very important. If too long then changes are not
     # shown. If too short then too much influence from previous lags.
@@ -444,7 +492,8 @@ def load_data(TSTEPS=10):
     START = 0
 
     # Load, process and learn a ConvLSTM2D network
-    trainX, trainY, _ = load_data_for_keras(START=START, NUM_IMAGES=NIMAGES1,
+    trainX, trainY, _ = load_data_for_keras(dd=dd,
+                                            START=START, NUM_IMAGES=NIMAGES1,
                                             TSTEP=TSTEPS)
     # print(trainX.shape, trainY.shape)
     trainX = trainX.reshape(trainX.shape[0]//TSTEPS, TSTEPS,
@@ -517,25 +566,42 @@ def plot_predicted_outputs_reg(vY, vYP, TSTEPS):
         plt.close()
 
 
-def regression_predict(model='Ridge', TSTEPS=10):
-    # XXX: We will need to do steps 2, 3, 5, and 10
-    tX, tY, vX, vY, lags = load_data(TSTEPS)
+def regression_predict(dd='./figs', model='Ridge', TSTEPS=10):
+    # XXX: We will need to do steps 5, 10 and 20
+    tX, tY, vX, vY, lags = load_data(dd=dd, TSTEPS=TSTEPS)
     tX = tX.reshape(tX.shape[:-1])
     vX = vX.reshape(vX.shape[:-1])
     # tX = np.append(tX, vX, axis=0)
     # tY = np.append(tY, vY, axis=0)
-    print('tX, tY: ', tX.shape, tY.shape)
+    # print('tX, tY: ', tX.shape, tY.shape)
     tX = tX.reshape(tX.shape[0], tX.shape[1]*tX.shape[2]*tX.shape[3])
     tY = tY.reshape(tY.shape[0], tY.shape[1]*tY.shape[2])
-    print('tX, tY:', tX.shape, tY.shape)
+    # print('tX, tY:', tX.shape, tY.shape)
 
     # XXX: Validation set
     vX = vX.reshape(vX.shape[0], vX.shape[1]*vX.shape[2]*vX.shape[3])
     vY = vY.reshape(vY.shape[0], vY.shape[1]*vY.shape[2])
-    print('vX, vY:', vX.shape, vY.shape)
+    # print('vX, vY:', vX.shape, vY.shape)
 
     # XXX: Intercept?
     intercept = True
+
+    # Fill in NaN's... required for non-parametric regression
+    mask = np.isnan(tX)
+    tX[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
+                         tX[~mask])
+    mask = np.isnan(tY)
+    tY[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
+                         tY[~mask])
+
+    print('tX, tY:', tX.shape, tY.shape)
+    mask = np.isnan(vX)
+    vX[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
+                         vX[~mask])
+    mask = np.isnan(vY)
+    vY[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
+                         vY[~mask])
+    print('vX, vY:', vX.shape, vY.shape)
 
     # XXX: Make a LinearRegression
     if model == 'Lasso':
@@ -585,7 +651,7 @@ def regression_predict(model='Ridge', TSTEPS=10):
     print('R2 score mean:', np.mean(r2sc), 'R2 score std-dev: ', np.std(r2sc))
 
     # XXX: Plot some outputs
-    # plot_predicted_outputs_reg(vY, vYP, TSTEPS)
+    plot_predicted_outputs_reg(vY, vYP, TSTEPS)
 
     # XXX: Save the model
     import pickle
@@ -593,15 +659,15 @@ def regression_predict(model='Ridge', TSTEPS=10):
         pickle.dump(reg, f)
 
 
-def convlstm_predict():
+def convlstm_predict(dd='./figs'):
     TSTEPS = 20
-    trainX, trainY, valX, valY, _ = load_data(TSTEPS=TSTEPS)
+    trainX, trainY, valX, valY, _ = load_data(dd=dd, TSTEPS=TSTEPS)
 
     # XXX: Inner number of filters
     inner_filters = 64
 
     # XXX: Now fit the model
-    batch_size = 20
+    batch_size = 10
 
     # XXX: Now build the keras model
     model = build_keras_model(trainX.shape, inner_filters, batch_size)
@@ -626,10 +692,10 @@ def convlstm_predict():
 
 if __name__ == '__main__':
     # XXX: Excel data to images
-    # excel_to_images()
+    # excel_to_images(dvf=False)
 
     # XXX: ConvLSTM2D prediction
-    convlstm_predict()
+    convlstm_predict(dd='./figs')
 
     # Normal regression prediction
-    # regression_predict(model='Lasso', TSTEPS=5)
+    # regression_predict(dd='./figs', TSTEPS=5)
