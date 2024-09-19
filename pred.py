@@ -588,6 +588,7 @@ def regression_predict(dd='./figs', model='Ridge', TSTEPS=10):
 
     # Fill in NaN's... required for non-parametric regression
     if dd == './gfigs':
+        print("Cleaning data for gfigs")
         mask = np.isnan(tX)
         tX[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
                              tX[~mask])
@@ -595,14 +596,14 @@ def regression_predict(dd='./figs', model='Ridge', TSTEPS=10):
         tY[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
                              tY[~mask])
 
-        print('tX, tY:', tX.shape, tY.shape)
+        # print('tX, tY:', tX.shape, tY.shape)
         mask = np.isnan(vX)
         vX[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
                              vX[~mask])
         mask = np.isnan(vY)
         vY[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
                              vY[~mask])
-        print('vX, vY:', vX.shape, vY.shape)
+        # print('vX, vY:', vX.shape, vY.shape)
 
     # XXX: Make a LinearRegression
     if model == 'Lasso':
@@ -615,7 +616,7 @@ def regression_predict(dd='./figs', model='Ridge', TSTEPS=10):
         reg = Ridge(fit_intercept=intercept, alpha=1)
 
     if model == 'OLS':
-        treg = 'linear'
+        treg = 'ols'
         reg = LinearRegression(fit_intercept=intercept, n_jobs=-1)
 
     if model == 'ElasticNet':
@@ -656,16 +657,21 @@ def regression_predict(dd='./figs', model='Ridge', TSTEPS=10):
 
     # XXX: Save the model
     import pickle
-    with open('model_%s_ts_%s.pkl' % (treg, lags), 'wb') as f:
-        pickle.dump(reg, f)
+    if dd != './gfigs':
+        with open('model_%s_ts_%s.pkl' % (treg, lags), 'wb') as f:
+            pickle.dump(reg, f)
+    else:
+        with open('model_%s_ts_%s_gfigs.pkl' % (treg, lags), 'wb') as f:
+            pickle.dump(reg, f)
 
 
 def convlstm_predict(dd='./figs'):
-    TSTEPS = 5
+    TSTEPS = 20
     trainX, trainY, valX, valY, _ = load_data(dd=dd, TSTEPS=TSTEPS)
 
     # Fill in NaN's... required for non-parametric regression
     if dd == './gfigs':
+        print("fixing gfigs data")
         mask = np.isnan(trainX)
         trainX[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
                                  trainX[~mask])
@@ -686,7 +692,7 @@ def convlstm_predict(dd='./figs'):
     inner_filters = 64
 
     # XXX: Now fit the model
-    batch_size = 50
+    batch_size = 20
 
     # XXX: Now build the keras model
     model = build_keras_model(trainX.shape, inner_filters, batch_size)
@@ -695,8 +701,12 @@ def convlstm_predict(dd='./figs'):
     history = keras_model_fit(model, trainX, trainY, valX, valY, batch_size)
 
     # XXX: Save the model after training
-    model.save('modelcr_bs_%s_ts_%s_filters_%s_%s.keras' %
-               (batch_size, TSTEPS, inner_filters, dd))
+    if dd == './gfigs':
+        model.save('modelcr_bs_%s_ts_%s_filters_%s_%s.keras' %
+                   (batch_size, TSTEPS, inner_filters, 'gfigs'))
+    else:
+        model.save('modelcr_bs_%s_ts_%s_filters_%s_%s.keras' %
+                   (batch_size, TSTEPS, inner_filters, 'figs'))
 
     # summarize history for loss
     plt.plot(history.history['loss'])
@@ -714,11 +724,12 @@ if __name__ == '__main__':
     # excel_to_images(dvf=False)
 
     # XXX: ConvLSTM2D prediction
-    convlstm_predict(dd='./gfigs')
+    # convlstm_predict(dd='./gfigs')
 
-    # Normal regression prediction
-    # for k in ['Ridge', 'OLS', 'RF', 'Lasso', 'ElasticNet']:
-    #     for j in ['./figs', './gfigs']:
-    #         for i in [5, 10, 20]:
-    #             print('Doing: %s_%s_%s' % (k, j, i))
-    #             regression_predict(model=k, dd=j, TSTEPS=i)
+    # Normal regression prediction (RUN THIS WITH OMP_NUM_THREADS=10 on
+    # command line)
+    for k in ['Ridge', 'OLS', 'RF' 'Lasso', 'ElasticNet']:
+        for j in ['./figs', './gfigs']:
+            for i in [5, 10, 20]:
+                print('Doing: %s_%s_%s' % (k, j, i))
+                regression_predict(model=k, dd=j, TSTEPS=i)
