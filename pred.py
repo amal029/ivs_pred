@@ -587,21 +587,22 @@ def regression_predict(dd='./figs', model='Ridge', TSTEPS=10):
     intercept = True
 
     # Fill in NaN's... required for non-parametric regression
-    mask = np.isnan(tX)
-    tX[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
-                         tX[~mask])
-    mask = np.isnan(tY)
-    tY[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
-                         tY[~mask])
+    if dd == './gfigs':
+        mask = np.isnan(tX)
+        tX[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
+                             tX[~mask])
+        mask = np.isnan(tY)
+        tY[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
+                             tY[~mask])
 
-    print('tX, tY:', tX.shape, tY.shape)
-    mask = np.isnan(vX)
-    vX[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
-                         vX[~mask])
-    mask = np.isnan(vY)
-    vY[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
-                         vY[~mask])
-    print('vX, vY:', vX.shape, vY.shape)
+        print('tX, tY:', tX.shape, tY.shape)
+        mask = np.isnan(vX)
+        vX[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
+                             vX[~mask])
+        mask = np.isnan(vY)
+        vY[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
+                             vY[~mask])
+        print('vX, vY:', vX.shape, vY.shape)
 
     # XXX: Make a LinearRegression
     if model == 'Lasso':
@@ -625,8 +626,8 @@ def regression_predict(dd='./figs', model='Ridge', TSTEPS=10):
     if model == 'RF':
         treg = 'rf'
         reg = RandomForestRegressor(n_jobs=10, max_features='sqrt',
-                                    n_estimators=100,
-                                    bootstrap=False, verbose=1)
+                                    n_estimators=150,
+                                    bootstrap=True, verbose=1)
 
     if model == 'XGBoost':
         treg = 'xgboost'
@@ -651,7 +652,7 @@ def regression_predict(dd='./figs', model='Ridge', TSTEPS=10):
     print('R2 score mean:', np.mean(r2sc), 'R2 score std-dev: ', np.std(r2sc))
 
     # XXX: Plot some outputs
-    plot_predicted_outputs_reg(vY, vYP, TSTEPS)
+    # plot_predicted_outputs_reg(vY, vYP, TSTEPS)
 
     # XXX: Save the model
     import pickle
@@ -660,14 +661,32 @@ def regression_predict(dd='./figs', model='Ridge', TSTEPS=10):
 
 
 def convlstm_predict(dd='./figs'):
-    TSTEPS = 20
+    TSTEPS = 5
     trainX, trainY, valX, valY, _ = load_data(dd=dd, TSTEPS=TSTEPS)
+
+    # Fill in NaN's... required for non-parametric regression
+    if dd == './gfigs':
+        mask = np.isnan(trainX)
+        trainX[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
+                                 trainX[~mask])
+        mask = np.isnan(trainY)
+        trainY[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
+                                 trainY[~mask])
+
+        print('tX, tY:', trainX.shape, trainY.shape)
+        mask = np.isnan(valX)
+        valX[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
+                               valX[~mask])
+        mask = np.isnan(valY)
+        valY[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
+                               valY[~mask])
+        print('vX, vY:', valX.shape, valY.shape)
 
     # XXX: Inner number of filters
     inner_filters = 64
 
     # XXX: Now fit the model
-    batch_size = 10
+    batch_size = 50
 
     # XXX: Now build the keras model
     model = build_keras_model(trainX.shape, inner_filters, batch_size)
@@ -676,8 +695,8 @@ def convlstm_predict(dd='./figs'):
     history = keras_model_fit(model, trainX, trainY, valX, valY, batch_size)
 
     # XXX: Save the model after training
-    model.save('modelcr_bs_%s_ts_%s_filters_%s.keras' %
-               (batch_size, TSTEPS, inner_filters))
+    model.save('modelcr_bs_%s_ts_%s_filters_%s_%s.keras' %
+               (batch_size, TSTEPS, inner_filters, dd))
 
     # summarize history for loss
     plt.plot(history.history['loss'])
@@ -695,7 +714,11 @@ if __name__ == '__main__':
     # excel_to_images(dvf=False)
 
     # XXX: ConvLSTM2D prediction
-    convlstm_predict(dd='./figs')
+    convlstm_predict(dd='./gfigs')
 
     # Normal regression prediction
-    # regression_predict(dd='./figs', TSTEPS=5)
+    # for k in ['Ridge', 'OLS', 'RF', 'Lasso', 'ElasticNet']:
+    #     for j in ['./figs', './gfigs']:
+    #         for i in [5, 10, 20]:
+    #             print('Doing: %s_%s_%s' % (k, j, i))
+    #             regression_predict(model=k, dd=j, TSTEPS=i)
