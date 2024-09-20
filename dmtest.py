@@ -173,7 +173,7 @@ def dm_test(
     n = P1.shape[0]
     l1 = loss(V, P1)
     l2 = loss(V, P2)
-    D = (l1 - l2)
+    D = l1 - l2
     mean = float(np.mean(D))
     D = D.tolist()
 
