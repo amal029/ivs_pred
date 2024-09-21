@@ -566,6 +566,17 @@ def plot_predicted_outputs_reg(vY, vYP, TSTEPS):
         plt.close()
 
 
+def clean_data(tX, tY):
+    print("Cleaning data for gfigs")
+    mask = np.isnan(tX)
+    tX[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
+                         tX[~mask])
+    mask = np.isnan(tY)
+    tY[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
+                         tY[~mask])
+    return tX, tY
+
+
 def regression_predict(dd='./figs', model='Ridge', TSTEPS=10):
     # XXX: We will need to do steps 5, 10 and 20
     tX, tY, vX, vY, lags = load_data(dd=dd, TSTEPS=TSTEPS)
@@ -588,22 +599,8 @@ def regression_predict(dd='./figs', model='Ridge', TSTEPS=10):
 
     # Fill in NaN's... required for non-parametric regression
     if dd == './gfigs':
-        print("Cleaning data for gfigs")
-        mask = np.isnan(tX)
-        tX[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
-                             tX[~mask])
-        mask = np.isnan(tY)
-        tY[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
-                             tY[~mask])
-
-        # print('tX, tY:', tX.shape, tY.shape)
-        mask = np.isnan(vX)
-        vX[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
-                             vX[~mask])
-        mask = np.isnan(vY)
-        vY[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
-                             vY[~mask])
-        # print('vX, vY:', vX.shape, vY.shape)
+        clean_data(tX, tY)
+        clean_data(vX, vY)
 
     # XXX: Make a LinearRegression
     if model == 'Lasso':

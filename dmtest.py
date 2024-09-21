@@ -3,7 +3,7 @@
 # https://github.com/edoannunziata/dieboldmariano/blob/master/src/dieboldmariano/dieboldmariano.py
 
 from itertools import islice
-from typing import Sequence, Callable, List, Tuple
+from typing import Sequence, Callable, Tuple
 from math import lgamma, fabs, isnan, nan, exp, log, log1p, sqrt
 from sklearn.metrics import root_mean_squared_error
 import numpy as np
@@ -119,7 +119,7 @@ def dm_test(
     P1: np.typing.ArrayLike,
     P2: np.typing.ArrayLike,
     *,
-    loss=root_mean_squared_error(multioutput='raw_values'),
+    loss=lambda x, y: root_mean_squared_error(x, y, multioutput='raw_values'),
     h: int = 1,
     one_sided: bool = False,
     harvey_correction: bool = True
