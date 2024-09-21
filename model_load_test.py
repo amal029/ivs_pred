@@ -202,13 +202,36 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000):
 
 
 if __name__ == '__main__':
-    rmses, mapes, r2sc, y, yp = main(plot=False, TSTEPS=10, model='ridge')
-    rmsesk, mapesk, r2sck, yk, ypk = main(plot=False, TSTEPS=10, model='rf')
+    # FIXME: This can be made better by running each model just once and
+    # then caching it.
+    models = ['ridge', 'lasso', 'rf', 'enet', 'keras']
+    fp = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
+                                                             len(models))
+          for t in [5, 10, 20]}
+    fd = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
+                                                             len(models))
+          for t in [5, 10, 20]}
 
-    assert (np.array_equal(y, yk))
+    print(fp[5].shape)
 
-    # XXX: Now we can do Diebold mariano test
-    dstat, pval = dmtest.dm_test(y, yp, ypk)  # ridge >= keras?
-    print('Diebold-Mariano test results. dstat: %s, pval: %s' % (dstat, pval))
-
-    # dir_to_num()
+    for t in fp.keys():
+        for i in range(0, len(models)-1):
+            for j in range(i+1, len(models)):
+                _, _, _, y, yp = main(plot=False, TSTEPS=t, model=models[i])
+                _, _, _, yk, ypk = main(plot=False, TSTEPS=t, model=models[j])
+                assert (np.array_equal(y, yk))
+                # XXX: Now we can do Diebold mariano test
+                try:
+                    dstat, pval = dmtest.dm_test(y, yp, ypk)
+                except dmtest.ZeroVarianceException:
+                    dstat, pval = np.nan, np.nan
+                # print('Diebold-Mariano test results. dstat: %s, pval: %s' %
+                #       (dstat, pval))
+                fd[t][i][j] = dstat
+                fp[t][i][j] = pval
+        # fres[t] = res
+    # XXX: Save the results
+    header = ','.join(models)
+    for t in fp.keys():
+        np.savetxt('pval_%s.csv' % t, fp[t], delimiter=',', header=header)
+        np.savetxt('dstat_%s.csv' % t, fd[t], delimiter=',', header=header)
