@@ -232,7 +232,6 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             TERM = [0, TS//2, TS-1]
             if model == 'ridge':
                 ws = m1.coef_.reshape(MS, TS, TSTEPS, MS, TS)
-                print(ws.shape)
                 # XXX: Just get the top 10 results
                 X = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
                 Y = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
@@ -317,8 +316,8 @@ def model_surf_v_point_model():
     # XXX: Only Ridge model(s)
     for dd in ['./figs', './gfigs']:
         for t in TTS:
-            _, _, _, y, yp = main(plot=False, TSTEPS=t, model="ridge")
-            _, _, _, yk, ypk = main(plot=False, TSTEPS=t, model="pmodel")
+            _, _, r2, y, yp = main(plot=False, TSTEPS=t, model="ridge")
+            _, _, r2k, yk, ypk = main(plot=False, TSTEPS=t, model="pmodel")
             assert (np.array_equal(y, yk))
             # XXX: Now we can do Diebold mariano test
             try:
@@ -330,7 +329,9 @@ def model_surf_v_point_model():
                       (t, dd.split('/')[1]), 'w') as f:
                 f.write('#ridge, pmodel\n')
                 f.write('dstat,pval\n')
-                f.write('%s,%s' % (dstat, pval))
+                f.write('%s,%s\n' % (dstat, pval))
+                f.write('r2ridge,r2pmodel\n')
+                f.write('%s,%s' % (np.mean(r2), np.mean(r2k)))
 
 
 if __name__ == '__main__':
