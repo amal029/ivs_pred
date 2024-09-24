@@ -716,6 +716,65 @@ def convlstm_predict(dd='./figs'):
                                                         inner_filters))
 
 
+def point_pred(dd='./figs', model='Ridge', TSTEPS=10):
+    # XXX: We will need to do steps 5, 10 and 20
+    tX, tY, vX, vY, lags = load_data(dd=dd, TSTEPS=TSTEPS)
+    tX = tX.reshape(tX.shape[:-1])
+    vX = vX.reshape(vX.shape[:-1])
+    # tX = np.append(tX, vX, axis=0)
+    # tY = np.append(tY, vY, axis=0)
+    # print('tX, tY: ', tX.shape, tY.shape)
+
+    # XXX: Validation set
+    # print('vX, vY:', vX.shape, vY.shape)
+
+    # Fill in NaN's... required for non-parametric regression
+    if dd == './gfigs':
+        clean_data(tX, tY)
+        clean_data(vX, vY)
+
+    # XXX: Now go through the MS and TS
+    mms = np.arange(LM, UM+MSTEP, MSTEP)
+    tts = [i/DAYS for i in range(LT, UT+TSTEP, TSTEP)]
+
+    count = 0
+    for i, s in enumerate(mms):
+        for j, t in enumerate(tts):
+            if count % 50 == 0:
+                print('Done: ', count)
+            count += 1
+            # XXX: Make the vector for training
+            k = np.array([s, t]*tX.shape[0]).reshape(tX.shape[0], 2)
+            train_vec = np.append(tX[:, :, i, j], k, axis=1)
+            # print(train_vec.shape, tY[:, i, j].shape)
+
+            # XXX: Fit the ridge model
+            treg = 'ridge'
+            reg = Ridge(fit_intercept=True, alpha=1)
+            reg.fit(train_vec, tY[:, i, j])
+            # print('Train set R2: ', reg.score(train_vec, tY[:, i, j]))
+
+            # XXX: Predict (Validation)
+            # print(vX.shape, vY.shape)
+            # k = np.array([s, t]*vX.shape[0]).reshape(vX.shape[0], 2)
+            # val_vec = np.append(vX[:, :, i, j], k, axis=1)
+            # vYP = reg.predict(val_vec)
+            # vvY = vY[:, i, j]
+            # r2sc = r2_score(vvY, vYP, multioutput='raw_values')
+            # print('Test R2:', np.mean(r2sc))
+
+            # XXX: Save the model
+            import pickle
+            if dd != './gfigs':
+                with open('./point_models/pm_%s_ts_%s_%s_%s.pkl' %
+                          (treg, lags, s, t), 'wb') as f:
+                    pickle.dump(reg, f)
+            else:
+                with open('./point_models/pm_%s_ts_%s_%s_%s_gfigs.pkl' %
+                          (treg, lags, s, t), 'wb') as f:
+                    pickle.dump(reg, f)
+
+
 if __name__ == '__main__':
     # XXX: Excel data to images
     # excel_to_images(dvf=False)
@@ -725,8 +784,14 @@ if __name__ == '__main__':
 
     # Normal regression prediction (RUN THIS WITH OMP_NUM_THREADS=10 on
     # command line)
-    for k in ['Ridge', 'OLS', 'RF' 'Lasso', 'ElasticNet']:
-        for j in ['./figs', './gfigs']:
-            for i in [5, 10, 20]:
-                print('Doing: %s_%s_%s' % (k, j, i))
-                regression_predict(model=k, dd=j, TSTEPS=i)
+    # for k in ['Ridge', 'OLS', 'RF' 'Lasso', 'ElasticNet']:
+    #     for j in ['./figs', './gfigs']:
+    #         for i in [5, 10, 20]:
+    #             print('Doing: %s_%s_%s' % (k, j, i))
+    #             regression_predict(model=k, dd=j, TSTEPS=i)
+
+    # XXX: Point regression
+    for j in ['./figs', './gfigs']:
+        for i in [5, 10, 20]:
+            print('Doing: Ridge_%s_%s' % (j, i))
+            point_pred(dd=j, TSTEPS=i)

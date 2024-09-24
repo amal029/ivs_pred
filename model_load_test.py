@@ -8,6 +8,7 @@ import glob
 from sklearn.metrics import root_mean_squared_error
 from sklearn.metrics import mean_absolute_percentage_error, r2_score
 import dmtest
+from mpl_toolkits.mplot3d import Axes3D
 
 
 def date_to_num(date, dd='./figs'):
@@ -100,14 +101,32 @@ def plotme(valY, Ydates, out):
             # axs[1, 1].title.set_text('diff dates :%s-%s' % (yd, pyd))
             plt.show()
             plt.close(fig)
-    pass
 
 
-def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000):
+def plot_hmap_features(vv, X, Y, name):
+    print(name)
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    xs, ys = np.meshgrid(Y, X)
+    for i in range(vv.shape[0]):
+        im = ax.plot_surface(xs, ys, vv[i],
+                             antialiased=False, linewidth=0,
+                             cmap='viridis')
+    ax.view_init(elev=30, azim=-125)
+    ax.set_zticks([])
+    ax.set_xlabel('Term structure')
+    ax.set_ylabel('Moneyness')
+    plt.colorbar(im)
+    plt.savefig(name, bbox_inches='tight')
+    # plt.show()
+
+
+def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
+         get_features=False, feature_res=10):
     # XXX: Important date: 20201014
 
     START = date_to_num('20190102')
-    print("START:", START)
+    # print("START:", START)
     NIMAGES = NIMAGES
 
     # XXX: Load the test dataset
@@ -126,16 +145,16 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000):
     valX, valY, Ydates = pred.load_data_for_keras(START=START, dd=dd,
                                                   NUM_IMAGES=NIMAGES,
                                                   TSTEP=pred.TSTEPS)
-    print(valX.shape, valY.shape)
+    # print(valX.shape, valY.shape)
     valX = valX.reshape(valX.shape[0]//pred.TSTEPS, pred.TSTEPS,
                         *valX.shape[1:])
-    print(valX.shape, valY.shape)
+    # print(valX.shape, valY.shape)
 
     # XXX: Clean the data
     if dd == './gfigs':
         valX, valY = pred.clean_data(valX, valY)
 
-    # XXX: Make a prediction for 10 images
+    # XXX: Make a prediction for images
     if model == 'keras':
         # XXX: Load the model
         if dd == './figs':
@@ -157,6 +176,34 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000):
             out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
             print('predicted reshaped: ', out.shape)
+
+    elif model == 'pmodel':
+        # XXX: The output vector
+        out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
+        out = out.reshape(*valY.shape)
+        # XXX: Now go through the MS and TS
+        mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+        tts = [i/pred.DAYS
+               for i in range(pred.LT, pred.UT+pred.TSTEP, pred.TSTEP)]
+        for i, s in enumerate(mms):
+            for j, t in enumerate(tts):
+                if dd == './figs':
+                    import pickle
+                    with open('./point_models/pm_%s_ts_%s_%s_%s.pkl' %
+                              ("ridge", TSTEPS, s, t), 'rb') as f:
+                        m1 = pickle.load(f)
+                else:
+                    with open('./point_models/pm_%s_ts_%s_%s_%s_gfigs.pkl' %
+                              ("ridge", TSTEPS, s, t), 'rb') as f:
+                        m1 = pickle.load(f)
+                # XXX: Now make the prediction
+                k = np.array([s, t]*valX.shape[0]).reshape(valX.shape[0], 2)
+                val_vec = np.append(valX[:, :, i, j], k, axis=1)
+                out[:, i, j] = m1.predict(val_vec)
+        if not plot:
+            out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
+            valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
+
     else:
         import pickle
         # XXX: Reshape the data for testing
@@ -176,6 +223,33 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000):
         print('Doing model: ', toopen)
         with open(toopen, "rb") as input_file:
             m1 = pickle.load(input_file)
+
+        # XXX: Get the feature importances
+        if get_features:
+            # XXX: Moneyness
+            MONEYNESS = [0, MS//2, MS-1]
+            # XXX: Some terms
+            TERM = [0, TS//2, TS-1]
+            if model == 'ridge':
+                ws = m1.coef_.reshape(MS, TS, TSTEPS, MS, TS)
+                print(ws.shape)
+                # XXX: Just get the top 10 results
+                X = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+                Y = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
+                                                pred.TSTEP)]
+                for i in MONEYNESS:
+                    for j in TERM:
+                        wsurf = ws[i][j]  # 1 IV point
+                        if dd == './figs':
+                            name = 'm_%s_t_%s_%s_fm.pdf' % (X[i],
+                                                            int(365*Y[j]),
+                                                            TSTEPS)
+                        else:
+                            name = 'm_%s_t_%s_%s_gfigs_fm.pdf' % (
+                                X[i],
+                                int(365*Y[j]),
+                                TSTEPS)
+                        plot_hmap_features(wsurf, X, Y, name)
 
         # XXX: Predict the output
         out = m1.predict(valX)
@@ -201,37 +275,67 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000):
         return rmses, mapes, r2sc, valY, out
 
 
-if __name__ == '__main__':
+def model_v_model():
     # FIXME: This can be made better by running each model just once and
     # then caching it.
+    TTS = [5, 10, 20]
     models = ['ridge', 'lasso', 'rf', 'enet', 'keras']
     fp = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
                                                              len(models))
-          for t in [5, 10, 20]}
+          for t in TTS}
     fd = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
                                                              len(models))
-          for t in [5, 10, 20]}
+          for t in TTS}
 
-    print(fp[5].shape)
+    for dd in ['./figs', './gfigs']:
+        for t in fp.keys():
+            for i in range(0, len(models)-1):
+                for j in range(i+1, len(models)):
+                    _, _, _, y, yp = main(plot=False, TSTEPS=t,
+                                          model=models[i], get_features=True)
+                    _, _, _, yk, ypk = main(plot=False, TSTEPS=t,
+                                            model=models[j], get_features=True)
+                    assert (np.array_equal(y, yk))
+                    # XXX: Now we can do Diebold mariano test
+                    try:
+                        dstat, pval = dmtest.dm_test(y, yp, ypk)
+                    except dmtest.ZeroVarianceException:
+                        dstat, pval = np.nan, np.nan
+                    fd[t][i][j] = dstat
+                    fp[t][i][j] = pval
+        # XXX: Save the results
+        header = ','.join(models)
+        for t in fp.keys():
+            np.savetxt('pval_%s_%s.csv' % (t, dd.split('/')[1]), fp[t],
+                       delimiter=',', header=header)
+            np.savetxt('dstat_%s_%s.csv' % (t, dd.split('/')[1]), fd[t],
+                       delimiter=',', header=header)
 
-    for t in fp.keys():
-        for i in range(0, len(models)-1):
-            for j in range(i+1, len(models)):
-                _, _, _, y, yp = main(plot=False, TSTEPS=t, model=models[i])
-                _, _, _, yk, ypk = main(plot=False, TSTEPS=t, model=models[j])
-                assert (np.array_equal(y, yk))
-                # XXX: Now we can do Diebold mariano test
-                try:
-                    dstat, pval = dmtest.dm_test(y, yp, ypk)
-                except dmtest.ZeroVarianceException:
-                    dstat, pval = np.nan, np.nan
-                # print('Diebold-Mariano test results. dstat: %s, pval: %s' %
-                #       (dstat, pval))
-                fd[t][i][j] = dstat
-                fp[t][i][j] = pval
-        # fres[t] = res
-    # XXX: Save the results
-    header = ','.join(models)
-    for t in fp.keys():
-        np.savetxt('pval_%s.csv' % t, fp[t], delimiter=',', header=header)
-        np.savetxt('dstat_%s.csv' % t, fd[t], delimiter=',', header=header)
+
+def model_surf_v_point_model():
+    TTS = [5, 10, 20]
+    # XXX: Only Ridge model(s)
+    for dd in ['./figs', './gfigs']:
+        for t in TTS:
+            _, _, _, y, yp = main(plot=False, TSTEPS=t, model="ridge")
+            _, _, _, yk, ypk = main(plot=False, TSTEPS=t, model="pmodel")
+            assert (np.array_equal(y, yk))
+            # XXX: Now we can do Diebold mariano test
+            try:
+                dstat, pval = dmtest.dm_test(y, yp, ypk)
+            except dmtest.ZeroVarianceException:
+                dstat, pval = np.nan, np.nan
+                # XXX: save the dstat and pvals
+            with open('%s_pmodel_v_model_%s.csv' %
+                      (t, dd.split('/')[1]), 'w') as f:
+                f.write('#ridge, pmodel\n')
+                f.write('dstat,pval\n')
+                f.write('%s,%s' % (dstat, pval))
+
+
+if __name__ == '__main__':
+    # XXX: This is many models vs many other models
+    # model_v_model()
+
+    # XXX: This is ridge surf vs ridge point estimate (base line paper)
+    model_surf_v_point_model()
