@@ -716,7 +716,101 @@ def convlstm_predict(dd='./figs'):
                                                         inner_filters))
 
 
-def point_pred(dd='./figs', model='Ridge', TSTEPS=10):
+def mskew_pred(dd='./figs', model='mskridge', TSTEPS=5):
+    # XXX: We will need to do steps 5, 10 and 20
+    tX, tY, vX, vY, lags = load_data(dd=dd, TSTEPS=TSTEPS)
+    tX = tX.reshape(tX.shape[:-1])
+    vX = vX.reshape(vX.shape[:-1])
+
+    # Fill in NaN's... required for non-parametric regression
+    if dd == './gfigs':
+        tX, tY = clean_data(tX, tY)
+        vX, vY = clean_data(vX, vY)
+
+    # XXX: Now go through the MS and TS
+    tts = [i/DAYS for i in range(LT, UT+TSTEP, TSTEP)]
+
+    count = 0
+
+    # XXX: Now we go moneyness skew
+    for j, t in enumerate(tts):
+        if count % 10 == 0:
+            print('Done: ', count)
+        count += 1
+        # XXX: shape = samples, TSTEPS, moneyness, term structure
+        mskew = tX[:, :, :, j]
+        tYY = tY[:, :, j]
+        mskew = mskew.reshape(mskew.shape[0], mskew.shape[1]*mskew.shape[2])
+        # XXX: Add t to the sample set
+        ts = np.array([t]*mskew.shape[0]).reshape(mskew.shape[0], 1)
+        mskew = np.append(mskew, ts, axis=1)
+        # XXX: Fit the ridge model
+        if model == 'mskridge':
+            reg = Ridge(fit_intercept=True, alpha=1)
+        elif model == 'msklasso':
+            reg = Lasso(fit_intercept=True, alpha=1)
+        else:
+            reg = ElasticNet(fit_intercept=True, alpha=1)
+        reg.fit(mskew, tYY)
+        import pickle
+        if dd != './gfigs':
+            with open('./mskew_models/%s_ts_%s_%s.pkl' %
+                      (model, lags, t), 'wb') as f:
+                pickle.dump(reg, f)
+        else:
+            with open('./mskew_models/%s_ts_%s_%s_gfigs.pkl' %
+                      (model, lags, t), 'wb') as f:
+                pickle.dump(reg, f)
+
+
+def tskew_pred(dd='./figs', model='tskridge', TSTEPS=5):
+    # XXX: We will need to do steps 5, 10 and 20
+    tX, tY, vX, vY, lags = load_data(dd=dd, TSTEPS=TSTEPS)
+    tX = tX.reshape(tX.shape[:-1])
+    vX = vX.reshape(vX.shape[:-1])
+
+    # Fill in NaN's... required for non-parametric regression
+    if dd == './gfigs':
+        tX, tY = clean_data(tX, tY)
+        vX, vY = clean_data(vX, vY)
+
+    # XXX: Now go through the MS and TS
+    mms = np.arange(LM, UM+MSTEP, MSTEP)
+
+    count = 0
+
+    # XXX: Now we go term structure skew
+    for j, m in enumerate(mms):
+        if count % 10 == 0:
+            print('Done: ', count)
+        count += 1
+        # XXX: shape = samples, TSTEPS, moneyness, term structure
+        tskew = tX[:, :, j]
+        tskew = tskew.reshape(tskew.shape[0], tskew.shape[1]*tskew.shape[2])
+        # XXX: Add m to the sample set
+        ms = np.array([m]*tskew.shape[0]).reshape(tskew.shape[0], 1)
+        tskew = np.append(tskew, ms, axis=1)
+        tYY = tY[:, j]
+        # XXX: Fit the ridge model
+        if model == 'tskridge':
+            reg = Ridge(fit_intercept=True, alpha=1)
+        elif model == 'tsklasso':
+            reg = Lasso(fit_intercept=True, alpha=1)
+        else:
+            reg = ElasticNet(fit_intercept=True, alpha=1)
+        reg.fit(tskew, tYY)
+        import pickle
+        if dd != './gfigs':
+            with open('./tskew_models/%s_ts_%s_%s.pkl' %
+                      (model, lags, m), 'wb') as f:
+                pickle.dump(reg, f)
+        else:
+            with open('./tskew_models/%s_ts_%s_%s_gfigs.pkl' %
+                      (model, lags, m), 'wb') as f:
+                pickle.dump(reg, f)
+
+
+def point_pred(dd='./figs', model='pmridge', TSTEPS=10):
     # XXX: We will need to do steps 5, 10 and 20
     tX, tY, vX, vY, lags = load_data(dd=dd, TSTEPS=TSTEPS)
     tX = tX.reshape(tX.shape[:-1])
@@ -749,8 +843,13 @@ def point_pred(dd='./figs', model='Ridge', TSTEPS=10):
             # print(train_vec.shape, tY[:, i, j].shape)
 
             # XXX: Fit the ridge model
-            treg = 'ridge'
-            reg = Ridge(fit_intercept=True, alpha=1)
+            if model == 'pmridge':
+                reg = Ridge(fit_intercept=True, alpha=1)
+            elif model == 'pmlasso':
+                reg = Lasso(fit_intercept=True, alpha=1)
+            else:
+                reg = ElasticNet(fit_intercept=True, alpha=1,
+                                 selection='random')
             reg.fit(train_vec, tY[:, i, j])
             # print('Train set R2: ', reg.score(train_vec, tY[:, i, j]))
 
@@ -766,12 +865,12 @@ def point_pred(dd='./figs', model='Ridge', TSTEPS=10):
             # XXX: Save the model
             import pickle
             if dd != './gfigs':
-                with open('./point_models/pm_%s_ts_%s_%s_%s.pkl' %
-                          (treg, lags, s, t), 'wb') as f:
+                with open('./point_models/%s_ts_%s_%s_%s.pkl' %
+                          (model, lags, s, t), 'wb') as f:
                     pickle.dump(reg, f)
             else:
-                with open('./point_models/pm_%s_ts_%s_%s_%s_gfigs.pkl' %
-                          (treg, lags, s, t), 'wb') as f:
+                with open('./point_models/%s_ts_%s_%s_%s_gfigs.pkl' %
+                          (model, lags, s, t), 'wb') as f:
                     pickle.dump(reg, f)
 
 
@@ -782,7 +881,7 @@ if __name__ == '__main__':
     # XXX: ConvLSTM2D prediction
     # convlstm_predict(dd='./gfigs')
 
-    # Normal regression prediction (RUN THIS WITH OMP_NUM_THREADS=10 on
+    # Surface regression prediction (RUN THIS WITH OMP_NUM_THREADS=10 on
     # command line)
     # for k in ['Ridge', 'OLS', 'RF' 'Lasso', 'ElasticNet']:
     #     for j in ['./figs', './gfigs']:
@@ -791,7 +890,22 @@ if __name__ == '__main__':
     #             regression_predict(model=k, dd=j, TSTEPS=i)
 
     # XXX: Point regression
+    # for j in ['./figs', './gfigs']:
+    #     for k in ['pmridge', 'pmlasso', 'pmenet']:
+    #         for i in [5, 10, 20]:
+    #             print('Doing: %s_%s_%s' % (k, j, i))
+    #             point_pred(dd=j, model=k, TSTEPS=i)
+
+    # XXX: Moneyness skew regression
     for j in ['./figs', './gfigs']:
-        for i in [5, 10, 20]:
-            print('Doing: Ridge_%s_%s' % (j, i))
-            point_pred(dd=j, TSTEPS=i)
+        for k in ['mskridge', 'msklasso', 'mskenet']:
+            for i in [5, 10, 20]:
+                print('Doing: %s_%s_%s' % (k, j, i))
+                mskew_pred(dd=j, model=k, TSTEPS=i)
+
+    # XXX: Term structure skew regression
+    for j in ['./figs', './gfigs']:
+        for k in ['tskridge', 'tsklasso', 'tskenet']:
+            for i in [5, 10, 20]:
+                print('Doing: %s_%s_%s' % (k, j, i))
+                tskew_pred(dd=j, model=k, TSTEPS=i)

@@ -5,10 +5,11 @@ import pred
 import numpy as np
 import matplotlib.pyplot as plt
 import glob
-from sklearn.metrics import root_mean_squared_error
-from sklearn.metrics import mean_absolute_percentage_error, r2_score
+# from sklearn.metrics import root_mean_squared_error
+# from sklearn.metrics import mean_absolute_percentage_error, r2_score
 import dmtest
-from mpl_toolkits.mplot3d import Axes3D
+# from mpl_toolkits.mplot3d import Axes3D
+import gzip
 
 
 def date_to_num(date, dd='./figs'):
@@ -104,7 +105,7 @@ def plotme(valY, Ydates, out):
 
 
 def plot_hmap_features(vv, X, Y, name):
-    print(name)
+    # print(name)
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
     xs, ys = np.meshgrid(Y, X)
@@ -118,16 +119,23 @@ def plot_hmap_features(vv, X, Y, name):
     ax.set_ylabel('Moneyness')
     plt.colorbar(im)
     plt.savefig(name, bbox_inches='tight')
+    plt.close(fig)
     # plt.show()
 
 
 def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
          get_features=False, feature_res=10):
-    # XXX: Important date: 20201014
+    # XXX: Num 3000 == '20140109'
+    START_DATE = '20140109'
+    END_DATE = '20221230'
 
-    START = date_to_num('20190102')
+    START = date_to_num(START_DATE)
+    END = date_to_num(END_DATE) - TSTEPS
+    # print(num_to_date(END))
+    # assert (False)
     # print("START:", START)
-    NIMAGES = NIMAGES
+    NIMAGES = END-START
+    # print(NIMAGES)
 
     # XXX: Load the test dataset
     pred.TSTEPS = TSTEPS
@@ -150,6 +158,14 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                         *valX.shape[1:])
     # print(valX.shape, valY.shape)
 
+    # XXX: Reshape the data for testing
+    MS = valY.shape[1]
+    TS = valY.shape[2]
+    # XXX: Moneyness
+    MONEYNESS = [0, MS//2, MS-1]
+    # XXX: Some terms
+    TERM = [0, TS//2, TS-1]
+
     # XXX: Clean the data
     if dd == './gfigs':
         valX, valY = pred.clean_data(valX, valY)
@@ -170,14 +186,12 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         print(m1.summary())
         # out = m1(valX, training=False).numpy()
         out = m1.predict(valX)
-        print('predicted shape: ', out.shape)
         if not plot:
             # XXX: Reshape data for measurements
             out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
-            print('predicted reshaped: ', out.shape)
 
-    elif model == 'pmodel':
+    elif model == 'pmridge' or model == 'pmlasso' or model == 'pmenet':
         # XXX: The output vector
         out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
         out = out.reshape(*valY.shape)
@@ -185,30 +199,156 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
         tts = [i/pred.DAYS
                for i in range(pred.LT, pred.UT+pred.TSTEP, pred.TSTEP)]
+        import pickle
         for i, s in enumerate(mms):
             for j, t in enumerate(tts):
                 if dd == './figs':
-                    import pickle
-                    with open('./point_models/pm_%s_ts_%s_%s_%s.pkl' %
-                              ("ridge", TSTEPS, s, t), 'rb') as f:
+                    with open('./point_models/%s_ts_%s_%s_%s.pkl' %
+                              (model, TSTEPS, s, t), 'rb') as f:
                         m1 = pickle.load(f)
                 else:
-                    with open('./point_models/pm_%s_ts_%s_%s_%s_gfigs.pkl' %
-                              ("ridge", TSTEPS, s, t), 'rb') as f:
+                    with open('./point_models/%s_ts_%s_%s_%s_gfigs.pkl' %
+                              (model, TSTEPS, s, t), 'rb') as f:
                         m1 = pickle.load(f)
                 # XXX: Now make the prediction
                 k = np.array([s, t]*valX.shape[0]).reshape(valX.shape[0], 2)
                 val_vec = np.append(valX[:, :, i, j], k, axis=1)
                 out[:, i, j] = m1.predict(val_vec)
+
+                # XXX: Feature vector plot
+                if get_features and model == 'pmridge':
+                    if i in MONEYNESS and j in TERM:
+                        fig, ax = plt.subplots()
+                        xaxis = ['t-%s' % (i+1) for i in (range(TSTEPS))[::-1]]
+                        xaxis.append(r'$\mu$')
+                        xaxis.append(r'$\tau$')
+                        ax.bar(xaxis, m1.coef_, color='b')
+                        ax.set_ylabel('Coefficient magnitudes')
+                        plt.xticks(fontsize=9, rotation=45)
+                        dfname = dd.split('/')[1]
+                        fname = './plots/%s_m_%s_t_%s_lags_%s_%s.pdf' % (
+                            model, s, t, TSTEPS, dfname)
+                        plt.savefig(fname, bbox_inches='tight')
+                        plt.close(fig)
+        if not plot:
+            out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
+            valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
+
+    elif model == 'tskenet' or model == 'tskridge' or model == 'tsklasso':
+        # XXX: The output vector
+        out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
+        out = out.reshape(*valY.shape)
+        mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+        # XXX: Go through the MS
+        import pickle
+        for j, m in enumerate(mms):
+            if dd == './figs':
+                with open('./tskew_models/%s_ts_%s_%s.pkl' %
+                          (model, TSTEPS, m), 'rb') as f:
+                    m1 = pickle.load(f)
+            else:
+                with open('./tskew_models/%s_ts_%s_%s_gfigs.pkl' %
+                          (model, TSTEPS, m), 'rb') as f:
+                    m1 = pickle.load(f)
+            tskew = valX[:, :, j]
+            tskew = tskew.reshape(tskew.shape[0],
+                                  tskew.shape[1]*tskew.shape[2])
+            # XXX: Add m to the sample set
+            ms = np.array([m]*tskew.shape[0]).reshape(tskew.shape[0], 1)
+            tskew = np.append(tskew, ms, axis=1)
+            # XXX: Predict the output
+            out[:, j] = m1.predict(tskew)
+
+            # XXX: Features plot
+            if get_features and model == 'tskridge':
+                if j in MONEYNESS:
+                    X = [i/pred.DAYS
+                         for i in range(pred.LT, pred.UT+pred.TSTEP,
+                                        pred.TSTEP)]
+                    labels = ['t-%s' % (i+1) for i in range(TSTEPS)[::-1]]
+                    markers = [(3+i, 1, 0) for i in range(TSTEPS)]
+                    for mts in TERM:
+                        # XXX: The term structure weights
+                        ws = m1.coef_[mts][:-1].reshape(TSTEPS, TS)
+                        # XXX: The moneyness weight
+                        wms = m1.coef_[mts][-1]
+                        # XXX: Make sure that the moneyness weight is nothing
+                        assert (abs(wms) < 1e-4)
+                        # XXX: Now just plot the 2d curves
+                        fig, ax = plt.subplots()
+                        for i in range(TSTEPS):
+                            ax.plot(X, ws[i], marker=markers[i],
+                                    label=labels[i], markevery=0.1)
+                        ax.set_ylabel('Coefficient magnitudes')
+                        ax.set_xlabel('Term structure')
+                        ax.legend(ncol=3)
+                        dfname = dd.split('/')[1]
+                        fname = './plots/%s_m_%s_t_%s_lags_%s_%s.pdf' % (
+                            model, m, X[mts], TSTEPS, dfname)
+                        plt.savefig(fname, bbox_inches='tight')
+                        plt.close(fig)
+
+        if not plot:
+            out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
+            valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
+
+    elif model == 'mskenet' or model == 'mskridge' or model == 'msklasso':
+        # XXX: The output vector
+        out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
+        out = out.reshape(*valY.shape)
+        mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+        # XXX: Now go through the TS
+        tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
+                                          pred.TSTEP)]
+        import pickle
+        for j, t in enumerate(tts):
+            if dd == './figs':
+                with open('./mskew_models/%s_ts_%s_%s.pkl' %
+                          (model, TSTEPS, t), 'rb') as f:
+                    m1 = pickle.load(f)
+            else:
+                with open('./mskew_models/%s_ts_%s_%s_gfigs.pkl' %
+                          (model, TSTEPS, t), 'rb') as f:
+                    m1 = pickle.load(f)
+            mskew = valX[:, :, :, j]
+            mskew = mskew.reshape(mskew.shape[0],
+                                  mskew.shape[1]*mskew.shape[2])
+            # XXX: Add t to the sample set
+            ts = np.array([t]*mskew.shape[0]).reshape(mskew.shape[0], 1)
+            mskew = np.append(mskew, ts, axis=1)
+            out[:, :, j] = m1.predict(mskew)
+
+            if get_features and model == 'mskridge':
+                if j in TERM:
+                    X = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+                    labels = ['t-%s' % (i+1) for i in range(TSTEPS)[::-1]]
+                    markers = [(3+i, 1, 0) for i in range(TSTEPS)]
+                    for mts in MONEYNESS:
+                        # XXX: The term structure weights
+                        ws = m1.coef_[mts][:-1].reshape(TSTEPS, MS)
+                        # XXX: The term structure weight
+                        wms = m1.coef_[mts][-1]
+                        # XXX: Make sure that the term structure weight=nil
+                        assert (abs(wms) < 1e-4)
+                        # XXX: Now just plot the 2d curves
+                        fig, ax = plt.subplots()
+                        for i in range(TSTEPS):
+                            ax.plot(X, ws[i], marker=markers[i],
+                                    label=labels[i], markevery=0.1)
+                        ax.set_ylabel('Coefficient magnitudes')
+                        ax.set_xlabel('Moneyness')
+                        ax.legend(ncol=3)
+                        dfname = dd.split('/')[1]
+                        fname = './plots/%s_m_%s_t_%s_lags_%s_%s.pdf' % (
+                            model, X[mts], t, TSTEPS, dfname)
+                        plt.savefig(fname, bbox_inches='tight')
+                        plt.close(fig)
         if not plot:
             out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
 
     else:
         import pickle
-        # XXX: Reshape the data for testing
-        MS = valY.shape[1]
-        TS = valY.shape[2]
         valX = valX.reshape(valX.shape[0],
                             valX.shape[1]*valX.shape[2]*valX.shape[3])
         if not plot:
@@ -220,16 +360,12 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         else:
             toopen = r"model_%s_ts_%s.pkl" % (model.lower(), pred.TSTEPS)
 
-        print('Doing model: ', toopen)
+        # print('Doing model: ', toopen)
         with open(toopen, "rb") as input_file:
             m1 = pickle.load(input_file)
 
         # XXX: Get the feature importances
         if get_features:
-            # XXX: Moneyness
-            MONEYNESS = [0, MS//2, MS-1]
-            # XXX: Some terms
-            TERM = [0, TS//2, TS-1]
             if model == 'ridge':
                 ws = m1.coef_.reshape(MS, TS, TSTEPS, MS, TS)
                 # XXX: Just get the top 10 results
@@ -240,14 +376,11 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                     for j in TERM:
                         wsurf = ws[i][j]  # 1 IV point
                         if dd == './figs':
-                            name = 'm_%s_t_%s_%s_fm.pdf' % (X[i],
-                                                            int(365*Y[j]),
-                                                            TSTEPS)
+                            name = './plots/%s_m_%s_t_%s_%s_fm.pdf' % (
+                                model, X[i], Y[j], TSTEPS)
                         else:
-                            name = 'm_%s_t_%s_%s_gfigs_fm.pdf' % (
-                                X[i],
-                                int(365*Y[j]),
-                                TSTEPS)
+                            name = './plots/%s_m_%s_t_%s_%s_gfigs_fm.pdf' % (
+                                model, X[i], Y[j], TSTEPS)
                         plot_hmap_features(wsurf, X, Y, name)
 
         # XXX: Predict the output
@@ -258,27 +391,48 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
 
     if plot:
         plotme(valY, Ydates, out)
-        return None, None, None, valY, out
+        return Ydates, valY, out
     else:
         # XXX: We want to do analysis (quant measures)
 
         # XXX: RMSE (mean and std-dev of RMSE)
-        rmses = root_mean_squared_error(valY, out, multioutput='raw_values')
-        mapes = mean_absolute_percentage_error(valY, out,
-                                               multioutput='raw_values')
-        r2sc = r2_score(valY, out, multioutput='raw_values')
-        print('RMSE mean: ', np.mean(rmses), 'RMSE std-dev: ', np.std(rmses))
-        print('MAPE mean: ', np.mean(mapes), 'MAPE std-dev: ', np.std(mapes))
-        print('R2 score mean:', np.mean(r2sc), 'R2 score std-dev: ',
-              np.std(r2sc))
-        return rmses, mapes, r2sc, valY, out
+        # rmses = root_mean_squared_error(valY, out, multioutput='raw_values')
+        # mapes = mean_absolute_percentage_error(valY, out,
+        #                                        multioutput='raw_values')
+        # r2sc = r2_score(valY, out, multioutput='raw_values')
+        # print('RMSE mean: ', np.mean(rmses), 'RMSE std-dev: ', np.std(rmses))
+        # print('MAPE mean: ', np.mean(mapes), 'MAPE std-dev: ', np.std(mapes))
+        # print('R2 score mean:', np.mean(r2sc), 'R2 score std-dev: ',
+        #       np.std(r2sc))
+        Ydates = np.array(Ydates)
+        # print(Ydates.shape, valY.shape, out.shape)
+        return Ydates, valY, out
+
+
+def save_results(models, fp, cache):
+    # XXX: f = gzip.GzipFile('file.npy.gz', "r"); np.load(f) -- to read
+    # XXX: Save all the dates and outputs
+    for dd in ['./figs', './gfigs']:
+        for t in fp.keys():
+            for m in models:
+                ddf = dd.split('/')[1]
+                tosave = './final_results/%s_ts_%s_model_%s.npy.gz' % (ddf,
+                                                                       t, m)
+                dates, y, o = cache[dd][t][m]
+                dates = dates.reshape(y.shape[0], 1)
+                res = np.append(dates, y, axis=1)
+                res = np.append(res, o, axis=1)
+                with gzip.open(filename=tosave, mode='wb',
+                               compresslevel=6) as f:
+                    np.save(file=f, arr=res)
 
 
 def model_v_model():
-    # FIXME: This can be made better by running each model just once and
-    # then caching it.
-    TTS = [5, 10, 20]
-    models = ['ridge', 'lasso', 'rf', 'enet', 'keras']
+    TTS = [20, 10, 5]
+    models = ['ridge', 'lasso',  # 'rf',
+              'enet',  # 'keras',
+              'pmridge', 'pmlasso', 'pmenet', 'mskridge',
+              'msklasso', 'mskenet', 'tskridge', 'tsklasso', 'tskenet']
     fp = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
                                                              len(models))
           for t in TTS}
@@ -286,14 +440,30 @@ def model_v_model():
                                                              len(models))
           for t in TTS}
 
+    cache = {i: {j: {k: None for k in models} for j in TTS}
+             for i in ['./figs', './gfigs']}
+
     for dd in ['./figs', './gfigs']:
         for t in fp.keys():
             for i in range(0, len(models)-1):
+                print('Comparing models with: ', dd, t, models[i])
                 for j in range(i+1, len(models)):
-                    _, _, _, y, yp = main(plot=False, TSTEPS=t,
-                                          model=models[i], get_features=True)
-                    _, _, _, yk, ypk = main(plot=False, TSTEPS=t,
-                                            model=models[j], get_features=True)
+                    if cache[dd][t][models[i]] is None:
+                        dates, y, yp = main(plot=False, TSTEPS=t,
+                                            model=models[i],
+                                            get_features=True,
+                                            dd=dd)
+                        cache[dd][t][models[i]] = (dates, y, yp)
+                    else:
+                        _, y, yp = cache[dd][t][models[i]]
+                    if cache[dd][t][models[j]] is None:
+                        dates, yk, ypk = main(plot=False, TSTEPS=t,
+                                              model=models[j],
+                                              get_features=True,
+                                              dd=dd)
+                        cache[dd][t][models[j]] = (dates, yk, ypk)
+                    else:
+                        _, yk, ypk = cache[dd][t][models[j]]
                     assert (np.array_equal(y, yk))
                     # XXX: Now we can do Diebold mariano test
                     try:
@@ -310,33 +480,12 @@ def model_v_model():
             np.savetxt('dstat_%s_%s.csv' % (t, dd.split('/')[1]), fd[t],
                        delimiter=',', header=header)
 
-
-def model_surf_v_point_model():
-    TTS = [5, 10, 20]
-    # XXX: Only Ridge model(s)
-    for dd in ['./figs', './gfigs']:
-        for t in TTS:
-            _, _, r2, y, yp = main(plot=False, TSTEPS=t, model="ridge")
-            _, _, r2k, yk, ypk = main(plot=False, TSTEPS=t, model="pmodel")
-            assert (np.array_equal(y, yk))
-            # XXX: Now we can do Diebold mariano test
-            try:
-                dstat, pval = dmtest.dm_test(y, yp, ypk)
-            except dmtest.ZeroVarianceException:
-                dstat, pval = np.nan, np.nan
-                # XXX: save the dstat and pvals
-            with open('%s_pmodel_v_model_%s.csv' %
-                      (t, dd.split('/')[1]), 'w') as f:
-                f.write('#ridge, pmodel\n')
-                f.write('dstat,pval\n')
-                f.write('%s,%s\n' % (dstat, pval))
-                f.write('r2ridge,r2pmodel\n')
-                f.write('%s,%s' % (np.mean(r2), np.mean(r2k)))
+    # XXX: Save all the results
+    print('Saving results')
+    save_results(models, fp, cache)
 
 
 if __name__ == '__main__':
+    plt.style.use('seaborn-v0_8-whitegrid')
     # XXX: This is many models vs many other models
-    # model_v_model()
-
-    # XXX: This is ridge surf vs ridge point estimate (base line paper)
-    model_surf_v_point_model()
+    model_v_model()
