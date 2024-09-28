@@ -599,8 +599,8 @@ def regression_predict(dd='./figs', model='Ridge', TSTEPS=10):
 
     # Fill in NaN's... required for non-parametric regression
     if dd == './gfigs':
-        clean_data(tX, tY)
-        clean_data(vX, vY)
+        tX, tY = clean_data(tX, tY)
+        vX, vY = clean_data(vX, vY)
 
     # XXX: Make a LinearRegression
     if model == 'Lasso':
@@ -655,10 +655,12 @@ def regression_predict(dd='./figs', model='Ridge', TSTEPS=10):
     # XXX: Save the model
     import pickle
     if dd != './gfigs':
-        with open('model_%s_ts_%s.pkl' % (treg, lags), 'wb') as f:
+        with open('./surf_models/model_%s_ts_%s.pkl' %
+                  (treg, lags), 'wb') as f:
             pickle.dump(reg, f)
     else:
-        with open('model_%s_ts_%s_gfigs.pkl' % (treg, lags), 'wb') as f:
+        with open('./surf_models/model_%s_ts_%s_gfigs.pkl' %
+                  (treg, lags), 'wb') as f:
             pickle.dump(reg, f)
 
 
@@ -824,8 +826,8 @@ def point_pred(dd='./figs', model='pmridge', TSTEPS=10):
 
     # Fill in NaN's... required for non-parametric regression
     if dd == './gfigs':
-        clean_data(tX, tY)
-        clean_data(vX, vY)
+        tX, tY = clean_data(tX, tY)
+        vX, vY = clean_data(vX, vY)
 
     # XXX: Now go through the MS and TS
     mms = np.arange(LM, UM+MSTEP, MSTEP)
@@ -883,18 +885,21 @@ if __name__ == '__main__':
 
     # Surface regression prediction (RUN THIS WITH OMP_NUM_THREADS=10 on
     # command line)
-    # for k in ['Ridge', 'OLS', 'RF' 'Lasso', 'ElasticNet']:
-    #     for j in ['./figs', './gfigs']:
-    #         for i in [5, 10, 20]:
-    #             print('Doing: %s_%s_%s' % (k, j, i))
-    #             regression_predict(model=k, dd=j, TSTEPS=i)
+    for k in ['Ridge',  # 'OLS',
+              # 'RF',
+              'Lasso',
+              'ElasticNet']:
+        for j in ['./figs', './gfigs']:
+            for i in [5, 10, 20]:
+                print('Doing: %s_%s_%s' % (k, j, i))
+                regression_predict(model=k, dd=j, TSTEPS=i)
 
     # XXX: Point regression
-    # for j in ['./figs', './gfigs']:
-    #     for k in ['pmridge', 'pmlasso', 'pmenet']:
-    #         for i in [5, 10, 20]:
-    #             print('Doing: %s_%s_%s' % (k, j, i))
-    #             point_pred(dd=j, model=k, TSTEPS=i)
+    for j in ['./figs', './gfigs']:
+        for k in ['pmridge', 'pmlasso', 'pmenet']:
+            for i in [5, 10, 20]:
+                print('Doing: %s_%s_%s' % (k, j, i))
+                point_pred(dd=j, model=k, TSTEPS=i)
 
     # XXX: Moneyness skew regression
     for j in ['./figs', './gfigs']:

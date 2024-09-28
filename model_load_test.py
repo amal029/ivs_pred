@@ -5,11 +5,12 @@ import pred
 import numpy as np
 import matplotlib.pyplot as plt
 import glob
-# from sklearn.metrics import root_mean_squared_error
-# from sklearn.metrics import mean_absolute_percentage_error, r2_score
+from sklearn.metrics import root_mean_squared_error
+from sklearn.metrics import r2_score
 import dmtest
 # from mpl_toolkits.mplot3d import Axes3D
 import gzip
+import pandas as pd
 
 
 def date_to_num(date, dd='./figs'):
@@ -356,9 +357,11 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
 
         # XXX: Load the model and then carry it out
         if dd == './gfigs':
-            toopen = r"model_%s_ts_%s_gfigs.pkl" % (model.lower(), pred.TSTEPS)
+            toopen = r"./surf_models/model_%s_ts_%s_gfigs.pkl" % (
+                model.lower(), pred.TSTEPS)
         else:
-            toopen = r"model_%s_ts_%s.pkl" % (model.lower(), pred.TSTEPS)
+            toopen = r"./surf_models/model_%s_ts_%s.pkl" % (
+                model.lower(), pred.TSTEPS)
 
         # print('Doing model: ', toopen)
         with open(toopen, "rb") as input_file:
@@ -427,6 +430,94 @@ def save_results(models, fp, cache):
                     np.save(file=f, arr=res)
 
 
+def getpreds(name1):
+    mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+    # XXX: Now go through the TS
+    tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
+                                      pred.TSTEP)]
+    MS = len(mms)
+    TS = len(tts)
+
+    with gzip.open(filename=name1, mode='rb') as f:
+        data1 = np.load(f)
+
+    y = data1[:, 1:MS*TS+1].astype(float, copy=False)
+    yp = data1[:, MS*TS+1:].astype(float, copy=False)
+
+    # XXX: Across time
+    return np.transpose(y), np.transpose(yp)
+
+
+def rmse_r2_time_series(fname, ax1, ax2, mm, m1, em):
+    mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+    # XXX: Now go through the TS
+    tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
+                                      pred.TSTEP)]
+    MS = len(mms)
+    TS = len(tts)
+
+    figss = fname.split('/')[2].split('_')[0]
+    mname = fname.split('/')[2].split('_')[4].split('.')[0]
+    mlags = fname.split('/')[2].split('_')[2]
+
+    print('Doing model: %s %s, Lags: %s' % (figss, mname, mlags))
+
+    with gzip.open(filename=fname, mode='rb') as f:
+        data = np.load(f)
+
+    # XXX: Attach the date time for each y and yp
+    date = pd.to_datetime(data[:, 0], format='%Y%m%d')
+    date = date.date
+    y = data[:, 1:MS*TS+1].astype(float, copy=False)
+    yp = data[:, MS*TS+1:].astype(float, copy=False)
+    print(date.shape, y.shape, yp.shape)
+
+    # XXX: Get the rolling RMSE
+    rmses = root_mean_squared_error(np.transpose(y), np.transpose(yp),
+                                    multioutput='raw_values')
+    r2cs = r2_score(np.transpose(y), np.transpose(yp),
+                    multioutput='raw_values')
+
+    ax1.plot(rmses, label='%s' % mname, marker=m1, markevery=em,
+             linewidth=0.6)
+    ax2.plot(r2cs, label='%s' % mname, marker=m1, markevery=em,
+             linewidth=0.6)
+    return date
+
+
+def overall(fname):
+    mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+    # XXX: Now go through the TS
+    tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
+                                      pred.TSTEP)]
+    MS = len(mms)
+    TS = len(tts)
+
+    figss = fname.split('/')[2].split('_')[0]
+    mname = fname.split('/')[2].split('_')[4].split('.')[0]
+    mlags = fname.split('/')[2].split('_')[2]
+
+    print('Doing model: %s %s, Lags: %s' % (figss, mname, mlags))
+
+    with gzip.open(filename=fname, mode='rb') as f:
+        data = np.load(f)
+
+    # XXX: Attach the date time for each y and yp
+    date = pd.to_datetime(data[:, 0], format='%Y%m%d')
+    y = data[:, 1:MS*TS+1].astype(float, copy=False)
+    yp = data[:, MS*TS+1:].astype(float, copy=False)
+    print(date.shape, y.shape, yp.shape)
+
+    # XXX: Get the rolling RMSE
+    rmses = root_mean_squared_error(np.transpose(y), np.transpose(yp),
+                                    multioutput='raw_values')
+    # mapes = mean_absolute_percentage_error(y, yp, multioutput='raw_values')
+    r2cs = r2_score(np.transpose(y), np.transpose(yp),
+                    multioutput='raw_values')
+
+    return (np.mean(rmses), np.std(rmses), np.mean(r2cs), np.std(r2cs))
+
+
 def model_v_model():
     TTS = [20, 10, 5]
     models = ['ridge', 'lasso',  # 'rf',
@@ -485,7 +576,157 @@ def model_v_model():
     save_results(models, fp, cache)
 
 
+def call_dmtest():
+    TTS = [20, 10, 5]
+    models = ['ridge', 'lasso', 'enet',
+              'pmridge', 'pmlasso', 'pmenet', 'mskridge',
+              'msklasso', 'mskenet', 'tskridge', 'tsklasso', 'tskenet']
+    fp = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
+                                                             len(models))
+          for t in TTS}
+    fd = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
+                                                             len(models))
+          for t in TTS}
+    cache = {i: {j: {k: None for k in models} for j in TTS}
+             for i in ['figs', 'gfigs']}
+    for dd in ['figs', 'gfigs']:
+        for ts in TTS:
+            fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, sharex=True)
+            for i in range(len(models)-1):
+                name1 = ('./final_results/%s_ts_%s_model_%s.npy.gz' %
+                         (dd, ts, models[i]))
+                print('Doing %d: %s' % (i, name1))
+                if cache[dd][ts][models[i]] is None:
+                    y, yp = getpreds(name1)
+                    cache[dd][ts][models[i]] = (y, yp)
+                else:
+                    y, yp = cache[dd][ts][models[i]]
+                for j in range(i+1, len(models)):
+                    # XXX: Do only the best ones
+                    name2 = ('./final_results/%s_ts_%s_model_%s.npy.gz' %
+                             (dd, ts, models[j]))
+                    print('Doing %d: %s' % (j, name2))
+                    if cache[dd][ts][models[j]] is None:
+                        yk, ypk = getpreds(name2)
+                        cache[dd][ts][models[j]] = (yk, ypk)
+                    else:
+                        yk, ypk = cache[dd][ts][models[j]]
+                    assert (np.array_equal(y, yk))
+                    # XXX: Now we can do Diebold mariano test
+                    try:
+                        dstat, pval = dmtest.dm_test(y, yp, ypk)
+                    except dmtest.ZeroVarianceException:
+                        dstat, pval = np.nan, np.nan
+                    fd[ts][i][j] = dstat
+                    fp[ts][i][j] = pval
+        # XXX: Save the results of dmtest
+        header = ','.join(models)
+        for t in fp.keys():
+            np.savetxt('./plots/pval_%s_%s_rmse.csv' % (t, dd), fp[t],
+                       delimiter=',', header=header)
+            np.savetxt('./plots/dstat_%s_%s_rmse.csv' % (t, dd), fd[t],
+                       delimiter=',', header=header)
+
+
+def call_timeseries():
+    # XXX: This is many models vs many other models
+    # model_v_model()
+    m1 = ['*', 'P', 'd', '8']
+    for dd in ['figs', 'gfigs']:
+        for ts in [5, 10, 20]:
+            fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, sharex=True)
+            for i, model in enumerate(['pmridge', 'ridge', 'tskridge',
+                                       'mskridge']):
+                # XXX: Do only the best ones
+                name = './final_results/%s_ts_%s_model_%s.npy.gz' % (dd, ts,
+                                                                     model)
+                dates = rmse_r2_time_series(name, ax1, ax2, model, m1[i],
+                                            em=0.999)
+            EVERY = 400
+            ax2.set_xticks(range(0, dates.shape[0], EVERY),
+                           labels=[dates[i]
+                                   for i in range(0, dates.shape[0], EVERY)])
+            ax2.set_xlabel('Dates')
+            ax1.set_ylabel('RMSE')
+            ax2.set_ylabel(r'$R^2$')
+            ax2.legend()
+            plt.xticks(fontsize=9, rotation=40)
+            plt.savefig('./plots/%s_rmse_r2_time_series_best_models_%s.pdf'
+                        % (dd, ts))
+            plt.close(fig)
+
+
+def call_overall():
+    # XXX: Now plot the overall RMSE, MAPE, and R2 for all models
+    # average across all results.
+    TTS = [20, 10, 5]
+    models = ['ridge', 'lasso', 'enet', 'pmridge', 'pmlasso',
+              'pmenet', 'mskridge', 'msklasso', 'mskenet', 'tskridge',
+              'tsklasso', 'tskenet']
+
+    # XXX: Do the overall RMSE, MAPE, and R2
+    for dd in ['figs', 'gfigs']:
+        for ts in TTS:
+            rmsemeans = []
+            # mapemeans = []
+            r2means = []
+            rmsestds = []
+            # mapestds = []
+            r2stds = []
+            for i, model in enumerate(models):
+                name = './final_results/%s_ts_%s_model_%s.npy.gz' % (dd, ts,
+                                                                     model)
+                rmsem, rmsestd, r2m, r2std = overall(name)
+                # XXX: MEAN
+                rmsemeans.append(rmsem)
+                # mapemeans.append(mapesm)
+                r2means.append(r2m)
+                # XXX: STD
+                rmsestds.append(rmsestd)
+                # mapestds.append(mapestd)
+                r2stds.append(r2std)
+
+            # XXX: plot means
+            fig, axs = plt.subplots(nrows=2, ncols=1, sharex=True)
+            bar0 = axs[0].bar(models, rmsemeans, width=0.2)
+            axs[0].bar_label(bar0, fmt='%3.3f')
+            # bar1 = axs[1].bar(models, mapemeans, width=0.2, color='r')
+            # if dd != 'gfigs':
+            #     axs[1].bar_label(bar1, fmt='%3.3f')
+            bar2 = axs[1].bar(models, r2means*100, width=0.2, color='g')
+            axs[1].bar_label(bar2, fmt='%3.3f')
+            axs[0].set_ylabel('RMSE (avg)')
+            # axs[1].set_ylabel('MAPE (avg)')
+            axs[1].set_ylabel(r'$R^2$ (avg)')
+            plt.xticks(fontsize=9, rotation=45)
+            plt.savefig('./plots/%s_rmse_r2_avg_models_%s.pdf'
+                        % (dd, ts))
+            plt.close(fig)
+
+            # XXX: Plot the std deviation
+            fig, axs = plt.subplots(nrows=2, ncols=1, sharex=True)
+            bar0 = axs[0].bar(models, rmsestds, width=0.2)
+            axs[0].bar_label(bar0, fmt='%3.3f')
+            # bar1 = axs[1].bar(models, mapestds, width=0.2, color='r')
+            # axs[1].bar_label(bar1, fmt='%3.3f')
+            bar2 = axs[1].bar(models, r2stds, width=0.2, color='g')
+            axs[1].bar_label(bar2, fmt='%3.3f')
+            axs[0].set_ylabel('RMSE (std-dev)')
+            # axs[1].set_ylabel('MAPE (std-dev)')
+            axs[1].set_ylabel(r'$R^2$ (std-dev)')
+            plt.xticks(fontsize=9, rotation=45)
+            plt.savefig('./plots/%s_rmse_r2_std_models_%s.pdf'
+                        % (dd, ts))
+            plt.close(fig)
+
+
 if __name__ == '__main__':
     plt.style.use('seaborn-v0_8-whitegrid')
-    # XXX: This is many models vs many other models
-    model_v_model()
+    # XXX: Plot the best time series RMSE and MAPE
+    # call_timeseries()
+
+    # XXX: Plot the bar graph for overall results
+    # call_overall()
+
+    # XXX: DM test across time (RMSE and R2)
+    call_dmtest()
