@@ -27,6 +27,9 @@ class Autoencoder:
         tX = tX.reshape(tX.shape[0], tX.shape[1]*tX.shape[2])
         self.model.fit(tX, tX, epochs=epochs, batch_size=batch_size, 
                        shuffle=shuffle, validation_split=validation_split)
+    
+    def save(self, path):
+        self.model.save(path)
 
     def autoencoder_build(self):
         encoding_dim= self.encoding_dim*self.input_shape[-1]
@@ -58,7 +61,7 @@ class Autoencoder:
         return encoder.predict(valX)
 
 
-def autoencoder_fit(tX, ty, encoding_dim, TSTEP=32):
+def autoencoder_fit(tX, ty, encoding_dim, TSTEPS=32):
     """
     Uses an autoencoder to extract features from the data 
     and then uses a regression model to predict the implied volatility
@@ -77,11 +80,11 @@ def autoencoder_fit(tX, ty, encoding_dim, TSTEP=32):
     return encoder, model
 
 
-def pca_predict(valX, model, n_components, TSTEP):
-    valX_transform = pca_transform(valX, n_components, TSTEP)
+def pca_predict(valX, model, n_components, TSTEPS):
+    valX_transform = pca_transform(valX, n_components, TSTEPS)
     return model.predict(valX_transform)
 
-def pca_transform(tX, components=3, TSTEP=32):
+def pca_transform(tX, components=3, TSTEPS=32):
     """
     uses PCA to extract features from the data
 
@@ -100,7 +103,7 @@ def pca_transform(tX, components=3, TSTEP=32):
 
     return tX_transform
     
-def pca_fit(tX, ty, components=3 , TSTEP=32):
+def pca_fit(tX, ty, components=3 , TSTEPS=32):
     """
     Uses PCA to extract features from the data 
     and then uses a regression model to predict the implied volatility
@@ -108,14 +111,14 @@ def pca_fit(tX, ty, components=3 , TSTEP=32):
     Features extracted will be in the shape of (samples, components*tX.shape[-1])
     i.e. component number of skews for each sample
     """
-    tX_transform = pca_transform(tX, components=components, TSTEP=TSTEP) 
+    tX_transform = pca_transform(tX, components=components, TSTEPS=TSTEPS) 
     # Fit regression model
     model = Ridge()
     model.fit(tX_transform, ty)
     return model
 
 
-def har_transform(tX, TSTEP=32):
+def har_transform(tX, TSTEPS=32):
     """
     Transform the given input data to the HAR method of feature extraction
 
@@ -124,7 +127,7 @@ def har_transform(tX, TSTEP=32):
 
     Output shape: (samples, tx.shape[-1]*3)
     """
-    if TSTEP != 32:
+    if TSTEPS != 32:
         raise ValueError('TSTEP must be 32 for HAR method of feature extraction')
 
     # Get average skew for 32 days
@@ -136,11 +139,11 @@ def har_transform(tX, TSTEP=32):
     return tX 
 
 
-def har_features(tX, tY, TSTEP=32):
+def har_features(tX, tY, TSTEPS=32):
     """
     Extracts har features of implied volatility which includes an averaged skew for the 1 month, 1 week and 1 day lagging features
     """
-    tX = har_transform(tX, TSTEP=TSTEP)
+    tX = har_transform(tX, TSTEPS=TSTEPS)
 
     # XXX: New shape is samples, 3 features concatenated
     
@@ -150,8 +153,8 @@ def har_features(tX, tY, TSTEP=32):
     return model
 
 
-def har_predict(valX, model, TSTEP=32):
-    valX_transform = har_transform(valX, TSTEP=TSTEP)
+def har_predict(valX, model, TSTEPS=32):
+    valX_transform = har_transform(valX, TSTEPS=TSTEPS)
     return model.predict(valX_transform)    
 
 def tskew_pred(model_name='pca', TSTEPS=10):
@@ -180,19 +183,19 @@ def tskew_pred(model_name='pca', TSTEPS=10):
         if model_name == 'har':
             if TSTEPS != 32:
                 continue
-            model = har_features(tskew, tYY, TSTEP=TSTEPS)
-            ypred = har_predict(vtskew, model, TSTEP=TSTEPS)
+            model = har_features(tskew, tYY, TSTEPS=TSTEPS)
+            ypred = har_predict(vtskew, model, TSTEPS=TSTEPS)
             # Fit the model
         elif model_name == 'autoencoder':
             encoding_dim = TSTEPS//2 
-            encoder, model = autoencoder_fit(tskew, tYY, encoding_dim=encoding_dim, TSTEP=TSTEPS)
+            encoder, model = autoencoder_fit(tskew, tYY, encoding_dim=encoding_dim, TSTEPS=TSTEPS)
             # transform and validate 
             valX_transform = encoder.predict(vtskew) 
             ypred = model.predict(valX_transform)
         else: # PCA
             n_components = TSTEPS//2 
-            model = pca_fit(tskew, tYY, components=n_components, TSTEP=TSTEPS)
-            ypred = pca_predict(vtskew, model, n_components=n_components, TSTEP=TSTEPS)
+            model = pca_fit(tskew, tYY, components=n_components, TSTEPS=TSTEPS)
+            ypred = pca_predict(vtskew, model, n_components=n_components, TSTEPS=TSTEPS)
             pass
 
         # Evaluate the model
@@ -205,6 +208,9 @@ def tskew_pred(model_name='pca', TSTEPS=10):
         print('R2 mean: ', np.mean(r2sc), 'R2 std: ', np.std(r2sc))
 
         import pickle
+        # Check if directory exists
+        if not os.path.exists('./tskew_feature_models'):
+            os.makedirs('./tskew_feature_models')
         with open('./tskew_feature_models/%s_ts_%s_%s.pkl' % (model_name, TSTEPS, m), 'wb') as f:
             pickle.dump(model, f)
 
@@ -215,7 +221,7 @@ def mskew_pred(model_name='pca', TSTEPS=10):
     tX = tX.reshape(tX.shape[:-1]) 
     vX = vX.reshape(vX.shape[:-1])
 
-    tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+TSTEPS, TSTEPS)]
+    tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP, pred.TSTEP)]
 
     count = 0
 
@@ -233,19 +239,19 @@ def mskew_pred(model_name='pca', TSTEPS=10):
         if model_name == 'har':
             if TSTEPS != 32:
                 continue
-            model = har_features(mskew, tYY, TSTEP=TSTEPS)
-            ypred = har_predict(vmskew, model, TSTEP=TSTEPS)
+            model = har_features(mskew, tYY, TSTEPS=TSTEPS)
+            ypred = har_predict(vmskew, model, TSTEPS=TSTEPS)
             # Fit the model
         elif model_name == 'autoencoder':
             encoding_dim = TSTEPS//2
-            encoder, model = autoencoder_fit(mskew, tYY, encoding_dim=encoding_dim, TSTEP=TSTEPS)
+            encoder, model = autoencoder_fit(mskew, tYY, encoding_dim=encoding_dim, TSTEPS=TSTEPS)
             # transform and validate 
             valX_transform = encoder.predict(vmskew) 
             ypred = model.predict(valX_transform)
         else: # PCA
             n_components = TSTEPS//2 
-            model = pca_fit(mskew, tYY, components=n_components, TSTEP=TSTEPS)
-            ypred = pca_predict(vmskew, model, n_components=n_components, TSTEP=TSTEPS)
+            model = pca_fit(mskew, tYY, components=n_components, TSTEPS=TSTEPS)
+            ypred = pca_predict(vmskew, model, n_components=n_components, TSTEPS=TSTEPS)
             pass
 
         # Evaluate the model
@@ -258,6 +264,10 @@ def mskew_pred(model_name='pca', TSTEPS=10):
         print('R2 mean: ', np.mean(r2sc), 'R2 std: ', np.std(r2sc))
 
         import pickle
+        # Check if directory exists
+        if not os.path.exists('./mskew_feature_models'):
+            os.makedirs('./mskew_feature_models')
+
         with open('./mskew_feature_models/%s_ts_%s_%s.pkl' % (model_name, TSTEPS, t), 'wb') as f:
             pickle.dump(model, f)
 
@@ -267,7 +277,10 @@ def mskew_pred(model_name='pca', TSTEPS=10):
 if __name__ == "__main__":
     # tskew_pred(model='autoencoder', TSTEPS=10) 
     # mskew_pred(model="autoencoder", TSTEPS=20)
-    for k in ['pca', 'har', 'autoencoder']:
-        for j in [5, 10, 20, 32]:
+    for k in ['autoencoder']:
+        for j in [5, 10, 20]:
             mskew_pred(model_name=k, TSTEPS=j)
             tskew_pred(model_name=k, TSTEPS=j)
+    # Do a run for the HAR method
+    tskew_pred(model='har', TSTEPS=32)
+    mskew_pred(model='har', TSTEPS=32)
