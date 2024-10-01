@@ -7,12 +7,74 @@ import keras
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.linear_model import Ridge
-from pred import load_data, load_data_for_keras, regression_predict
+from pred import load_data, load_data_for_keras
 from sklearn.metrics import root_mean_squared_error
 from sklearn.metrics import mean_absolute_percentage_error
 from sklearn.metrics import r2_score
+from keras.layers import Input, Dense
+from keras.models import Model
 
 import pred
+
+class Autoencoder:
+    def __init__(self, encoding_dim, input_shape):
+        self.encoding_dim = encoding_dim
+        self.input_shape = input_shape
+        self.model = self.autoencoder_build()
+        pass
+
+    def fit(self, tX, epochs=100, batch_size=256, shuffle=True, validation_split=0.2):
+        tX = tX.reshape(tX.shape[0], tX.shape[1]*tX.shape[2])
+        self.model.fit(tX, tX, epochs=epochs, batch_size=batch_size, 
+                       shuffle=shuffle, validation_split=validation_split)
+
+    def autoencoder_build(self):
+        encoding_dim= self.encoding_dim*self.input_shape[-1]
+
+        # Reshape the data
+        combined_shape = self.input_shape[1]*self.input_shape[2]
+
+        # Fit and transform the data
+        input_layer = Input(shape=(combined_shape,))
+        encoded = Dense(encoding_dim, activation='relu')(input_layer)
+        decoded = Dense(combined_shape, activation='sigmoid')(encoded)
+
+        autoencoder = Model(input_layer, decoded)
+        autoencoder.compile(optimizer='adam', loss='mse')
+        print(autoencoder.summary())
+
+        return autoencoder 
+
+    def predict(self, valX):
+        """
+        Transforms the input into expected shape and passes it through the encoder
+
+        Input shape: (samples, TSTEP, moneyness)
+        Output shape: (samples, encoding_dim*tX.shape[-1])
+        """
+        # Transform the data to predict
+        encoder = Model(inputs=self.model.input, outputs=self.model.layers[1].output)
+        valX = valX.reshape(valX.shape[0], valX.shape[1]*valX.shape[2])
+        return encoder.predict(valX)
+
+
+def autoencoder_fit(tX, ty, encoding_dim, TSTEP=32):
+    """
+    Uses an autoencoder to extract features from the data 
+    and then uses a regression model to predict the implied volatility
+
+    Features extracted will be in the shape of (samples, components*tX.shape[-1])
+    i.e. component number of skews for each sample
+
+    Output: encoder, ridge model 
+    """
+    encoder = Autoencoder(encoding_dim, tX.shape)
+    encoder.fit(tX)
+    tX_transform = encoder.predict(tX)
+    # Fit regression model
+    model = Ridge()
+    model.fit(tX_transform, ty)
+    return encoder, model
 
 
 def pca_predict(valX, model, n_components, TSTEP):
@@ -92,10 +154,62 @@ def har_predict(valX, model, TSTEP=32):
     valX_transform = har_transform(valX, TSTEP=TSTEP)
     return model.predict(valX_transform)    
 
-     
-def main():
-    TSTEPS = 20 
-    model = 'pca'
+def tskew_pred(model_name='pca', TSTEPS=10):
+    # Load data
+    tX, tY, vX, vY, _ = load_data(TSTEPS=TSTEPS)
+    tX = tX.reshape(tX.shape[:-1]) 
+    vX = vX.reshape(vX.shape[:-1])
+
+    mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+
+    count = 0
+
+    for j, m in enumerate(mms):
+        if count % 10 == 0:
+            print('Done: ', count)
+        count += 1
+
+        # XXX: shape = samples, TSTEPS, moneyness, term structure
+        # No need to reshape as har requires the tstep feature
+        tskew = tX[:, :, j]
+        tYY = tY[:, j]
+
+        vtskew= vX[:, :, j]
+        
+        # Fit the model
+        if model_name == 'har':
+            if TSTEPS != 32:
+                continue
+            model = har_features(tskew, tYY, TSTEP=TSTEPS)
+            ypred = har_predict(vtskew, model, TSTEP=TSTEPS)
+            # Fit the model
+        elif model_name == 'autoencoder':
+            encoding_dim = TSTEPS//2 
+            encoder, model = autoencoder_fit(tskew, tYY, encoding_dim=encoding_dim, TSTEP=TSTEPS)
+            # transform and validate 
+            valX_transform = encoder.predict(vtskew) 
+            ypred = model.predict(valX_transform)
+        else: # PCA
+            n_components = TSTEPS//2 
+            model = pca_fit(tskew, tYY, components=n_components, TSTEP=TSTEPS)
+            ypred = pca_predict(vtskew, model, n_components=n_components, TSTEP=TSTEPS)
+            pass
+
+        # Evaluate the model
+        rmse = root_mean_squared_error(vY[:, j], ypred, multioutput='raw_values')
+        mapes = mean_absolute_percentage_error(vY[:, j], ypred, multioutput='raw_values')
+        r2sc = r2_score(vY[:, j], ypred, multioutput='raw_values')
+
+        print('RMSE mean: ', np.mean(rmse), 'RMSE std: ', np.std(rmse))
+        print('MAPE mean: ', np.mean(mapes), 'MAPE std: ', np.std(mapes))
+        print('R2 mean: ', np.mean(r2sc), 'R2 std: ', np.std(r2sc))
+
+        import pickle
+        with open('./tskew_feature_models/%s_ts_%s_%s.pkl' % (model_name, TSTEPS, m), 'wb') as f:
+            pickle.dump(model, f)
+
+
+def mskew_pred(model_name='pca', TSTEPS=10):
     # Load data
     tX, tY, vX, vY, _ = load_data(TSTEPS=TSTEPS)
     tX = tX.reshape(tX.shape[:-1]) 
@@ -116,13 +230,22 @@ def main():
         vmskew= vX[:, :, :, j]
         
         # Fit the model
-        if model == 'har':
+        if model_name == 'har':
+            if TSTEPS != 32:
+                continue
             model = har_features(mskew, tYY, TSTEP=TSTEPS)
             ypred = har_predict(vmskew, model, TSTEP=TSTEPS)
             # Fit the model
+        elif model_name == 'autoencoder':
+            encoding_dim = TSTEPS//2
+            encoder, model = autoencoder_fit(mskew, tYY, encoding_dim=encoding_dim, TSTEP=TSTEPS)
+            # transform and validate 
+            valX_transform = encoder.predict(vmskew) 
+            ypred = model.predict(valX_transform)
         else: # PCA
-            model = pca_fit(mskew, tYY, components=3, TSTEP=TSTEPS)
-            ypred = pca_predict(vmskew, model, n_components=3, TSTEP=TSTEPS)
+            n_components = TSTEPS//2 
+            model = pca_fit(mskew, tYY, components=n_components, TSTEP=TSTEPS)
+            ypred = pca_predict(vmskew, model, n_components=n_components, TSTEP=TSTEPS)
             pass
 
         # Evaluate the model
@@ -135,11 +258,16 @@ def main():
         print('R2 mean: ', np.mean(r2sc), 'R2 std: ', np.std(r2sc))
 
         import pickle
-        # with open('./mskew_har_feature_models/%s_ts_%s_%s.pkl' % (model, TSTEPS, t), 'wb') as f:
-        #     pickle.dump(model, f)
+        with open('./mskew_feature_models/%s_ts_%s_%s.pkl' % (model_name, TSTEPS, t), 'wb') as f:
+            pickle.dump(model, f)
 
 
 
 
 if __name__ == "__main__":
-    main()
+    # tskew_pred(model='autoencoder', TSTEPS=10) 
+    # mskew_pred(model="autoencoder", TSTEPS=20)
+    for k in ['pca', 'har', 'autoencoder']:
+        for j in [5, 10, 20, 32]:
+            mskew_pred(model_name=k, TSTEPS=j)
+            tskew_pred(model_name=k, TSTEPS=j)
