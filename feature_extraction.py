@@ -1,4 +1,5 @@
 import pandas as pd
+import pickle
 import numpy as np
 import os
 import fnmatch
@@ -84,7 +85,7 @@ def pca_predict(valX, model, n_components, TSTEPS):
     valX_transform = pca_transform(valX, n_components, TSTEPS)
     return model.predict(valX_transform)
 
-def pca_transform(tX, components=3, TSTEPS=32):
+def pca_transform(tX, components=3, TSTEPS=32, type='skew'):
     """
     uses PCA to extract features from the data
 
@@ -92,10 +93,12 @@ def pca_transform(tX, components=3, TSTEPS=32):
 
     Ouput shape: (samples, components*tX.shape[-1])
     """
-    n_components = components*tX.shape[-1]
-
-    # Reshape the data
-    tX = tX.reshape(tX.shape[0], tX.shape[1]*tX.shape[2])
+    if type == 'skew':
+        n_components = components*tX.shape[-1]
+        # Reshape the data
+        tX = tX.reshape(tX.shape[0], tX.shape[1]*tX.shape[2])
+    else: # point model
+        n_components = components
 
     # Fit and transform the data
     pca = PCA(n_components=n_components)
@@ -103,7 +106,7 @@ def pca_transform(tX, components=3, TSTEPS=32):
 
     return tX_transform
     
-def pca_fit(tX, ty, components=3 , TSTEPS=32):
+def pca_fit(tX, ty, components=3 , TSTEPS=32, type='skew'):
     """
     Uses PCA to extract features from the data 
     and then uses a regression model to predict the implied volatility
@@ -111,14 +114,14 @@ def pca_fit(tX, ty, components=3 , TSTEPS=32):
     Features extracted will be in the shape of (samples, components*tX.shape[-1])
     i.e. component number of skews for each sample
     """
-    tX_transform = pca_transform(tX, components=components, TSTEPS=TSTEPS) 
+    tX_transform = pca_transform(tX, components=components, TSTEPS=TSTEPS, type=type) 
     # Fit regression model
     model = Ridge()
     model.fit(tX_transform, ty)
     return model
 
 
-def har_transform(tX, TSTEPS=32):
+def har_transform(tX, TSTEPS=32, type='skew'):
     """
     Transform the given input data to the HAR method of feature extraction
 
@@ -131,19 +134,29 @@ def har_transform(tX, TSTEPS=32):
         raise ValueError('TSTEP must be 32 for HAR method of feature extraction')
 
     # Get average skew for 32 days
-    skew1 = np.mean(tX[:, :, :], axis=1)
-    skew2 = np.mean(tX[:, -5:, :], axis=1)
-    skew3 = np.mean(tX[:, -1:, :], axis=1)
+    if type == 'skew':
+        skew1 = np.mean(tX[:, :, :], axis=1)
+        skew2 = np.mean(tX[:, -5:, :], axis=1)
+        skew3 = np.mean(tX[:, -1:, :], axis=1)
+        tX = np.concatenate([skew1, skew2, skew3], axis=1)
+    else: # Point model
+        # remove the moneyness and term structure features
+        moneyness = tX[:, -2:-1]
+        term_structure = tX[:, -1:]
+        skew1 = np.mean(tX[:, :-2], axis=1).reshape(-1, 1)
+        skew2 = np.mean(tX[:, -7:-2], axis=1).reshape(-1, 1)
+        skew3 = np.mean(tX[:, -3:-2], axis=1).reshape(-1, 1)
+        tX = np.concatenate([skew1, skew2, skew3, moneyness, term_structure], axis=1)
 
-    tX = np.concatenate([skew1, skew2, skew3], axis=1)
+
     return tX 
 
 
-def har_features(tX, tY, TSTEPS=32):
+def har_features(tX, tY, TSTEPS=32, type='skew'):
     """
     Extracts har features of implied volatility which includes an averaged skew for the 1 month, 1 week and 1 day lagging features
     """
-    tX = har_transform(tX, TSTEPS=TSTEPS)
+    tX = har_transform(tX, TSTEPS=TSTEPS, type=type)
 
     # XXX: New shape is samples, 3 features concatenated
     
@@ -157,11 +170,19 @@ def har_predict(valX, model, TSTEPS=32):
     valX_transform = har_transform(valX, TSTEPS=TSTEPS)
     return model.predict(valX_transform)    
 
-def tskew_pred(model_name='pca', TSTEPS=10):
+def tskew_pred(model_name='pca', TSTEPS=10, dd='./figs'):
+    # Check if directory exists
+    if not os.path.exists('./tskew_feature_models'):
+        os.makedirs('./tskew_feature_models')
+
     # Load data
-    tX, tY, vX, vY, _ = load_data(TSTEPS=TSTEPS)
+    tX, tY, vX, vY, _ = load_data(TSTEPS=TSTEPS, dd=dd)
     tX = tX.reshape(tX.shape[:-1]) 
     vX = vX.reshape(vX.shape[:-1])
+
+    if dd == './gfigs':
+        tX, tY = pred.clean_data(tX, tY)
+        vX, vY = pred.clean_data(vX, vY)
 
     mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
 
@@ -189,6 +210,11 @@ def tskew_pred(model_name='pca', TSTEPS=10):
         elif model_name == 'autoencoder':
             encoding_dim = TSTEPS//2 
             encoder, model = autoencoder_fit(tskew, tYY, encoding_dim=encoding_dim, TSTEPS=TSTEPS)
+            # Save encoder model
+            if dd != './gfigs':
+                encoder.save('./tskew_feature_models/%s_ts_%s_%s_encoder.keras' % (model_name, TSTEPS, m))
+            else:
+                encoder.save('./tskew_feature_models/%s_ts_%s_%s_encoder_gfigs.keras' % (model_name, TSTEPS, m))
             # transform and validate 
             valX_transform = encoder.predict(vtskew) 
             ypred = model.predict(valX_transform)
@@ -207,19 +233,27 @@ def tskew_pred(model_name='pca', TSTEPS=10):
         print('MAPE mean: ', np.mean(mapes), 'MAPE std: ', np.std(mapes))
         print('R2 mean: ', np.mean(r2sc), 'R2 std: ', np.std(r2sc))
 
-        import pickle
-        # Check if directory exists
-        if not os.path.exists('./tskew_feature_models'):
-            os.makedirs('./tskew_feature_models')
-        with open('./tskew_feature_models/%s_ts_%s_%s.pkl' % (model_name, TSTEPS, m), 'wb') as f:
-            pickle.dump(model, f)
+        if dd != './gfigs':
+            with open('./tskew_feature_models/%s_ts_%s_%s.pkl' % (model_name, TSTEPS, m), 'wb') as f:
+                pickle.dump(model, f)
+        else:
+            with open('./tskew_feature_models/%s_ts_%s_%s_gfigs.pkl' % (model_name, TSTEPS, m), 'wb') as f:
+                pickle.dump(model, f)
 
 
-def mskew_pred(model_name='pca', TSTEPS=10):
+def mskew_pred(model_name='pca', TSTEPS=10, dd='./figs'):
+    # Check if directory exists
+    if not os.path.exists('./mskew_feature_models'):
+        os.makedirs('./mskew_feature_models')
+
     # Load data
-    tX, tY, vX, vY, _ = load_data(TSTEPS=TSTEPS)
+    tX, tY, vX, vY, _ = load_data(TSTEPS=TSTEPS, dd=dd)
     tX = tX.reshape(tX.shape[:-1]) 
     vX = vX.reshape(vX.shape[:-1])
+
+    if dd == './gfigs':
+        tX, tY = pred.clean_data(tX, tY)
+        vX, vY = pred.clean_data(vX, vY)
 
     tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP, pred.TSTEP)]
 
@@ -245,6 +279,11 @@ def mskew_pred(model_name='pca', TSTEPS=10):
         elif model_name == 'autoencoder':
             encoding_dim = TSTEPS//2
             encoder, model = autoencoder_fit(mskew, tYY, encoding_dim=encoding_dim, TSTEPS=TSTEPS)
+            # Save encoder model
+            if dd != './gfigs':
+                encoder.save('./mskew_feature_models/%s_ts_%s_%s_encoder.keras' % (model_name, TSTEPS, t))
+            else:
+                encoder.save('./mskew_feature_models/%s_ts_%s_%s_encoder_gfigs.keras' % (model_name, TSTEPS, t))
             # transform and validate 
             valX_transform = encoder.predict(vmskew) 
             ypred = model.predict(valX_transform)
@@ -263,24 +302,118 @@ def mskew_pred(model_name='pca', TSTEPS=10):
         print('MAPE mean: ', np.mean(mapes), 'MAPE std: ', np.std(mapes))
         print('R2 mean: ', np.mean(r2sc), 'R2 std: ', np.std(r2sc))
 
-        import pickle
-        # Check if directory exists
-        if not os.path.exists('./mskew_feature_models'):
-            os.makedirs('./mskew_feature_models')
+        if dd != './gfigs':
+            with open('./mskew_feature_models/%s_ts_%s_%s.pkl' % (model_name, TSTEPS, t), 'wb') as f:
+                pickle.dump(model, f)
+        else:
+            with open('./mskew_feature_models/%s_ts_%s_%s_gfigs.pkl' % (model_name, TSTEPS, t), 'wb') as f:
+                pickle.dump(model, f)
 
-        with open('./mskew_feature_models/%s_ts_%s_%s.pkl' % (model_name, TSTEPS, t), 'wb') as f:
-            pickle.dump(model, f)
+def point_pred(model_name='pca', TSTEPS=10, dd='./figs'):
+    # Check if directory exists
+    if not os.path.exists('./point_feature_models'):
+        os.makedirs('./point_feature_models')
+
+    # Load data
+    tX, tY, vX, vY, _ = load_data(TSTEPS=TSTEPS, dd=dd)
+    tX = tX.reshape(tX.shape[:-1]) 
+    vX = vX.reshape(vX.shape[:-1])
+
+    if dd == './gfigs':
+        tX, tY = pred.clean_data(tX, tY)
+        vX, vY = pred.clean_data(vX, vY)
+
+    tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP, pred.TSTEP)]
+    mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+
+    count = 0
+
+    for i, s in enumerate(mms):
+        for j, t in enumerate(tts):
+            if count % 50 == 0:
+                print('Done: ', count)
+            count += 1
+            # XXX: Make the vector for training
+            k = np.array([s, t]*tX.shape[0]).reshape(tX.shape[0], 2)
+            train_vec = np.append(tX[:, :, i, j], k, axis=1)
+            # print(train_vec.shape, tY[:, i, j].shape)
+
+            # Fit the model
+            if model_name == 'har':
+                if TSTEPS != 32:
+                    continue
+                reg = har_features(train_vec, tY[:, i, j], TSTEPS=TSTEPS, type='point')
+                tX_transform = har_transform(train_vec, TSTEPS=TSTEPS, type='point')
+                print('Train set R2: ', reg.score(tX_transform, tY[:, i, j]))
+                # ypred = har_predict(vmskew, reg, TSTEPS=TSTEPS)
+                # Fit the model
+            elif model_name == 'autoencoder':
+                encoding_dim = TSTEPS//2
+                encoder, reg = autoencoder_fit(train_vec, tY[:, i, j], encoding_dim=encoding_dim, TSTEPS=TSTEPS)
+                # Save encoder model
+                if dd != './gfigs':
+                    encoder.save('./point_feature_models/%s_ts_%s_%s_encoder.keras' % (model_name, TSTEPS, t))
+                else:
+                    encoder.save('./point_feature_models/%s_ts_%s_%s_encoder_gfigs.keras' % (model_name, TSTEPS, t))
+                # # transform and validate 
+                # valX_transform = encoder.predict(vmskew) 
+                # ypred = reg.predict(valX_transform)
+            else: # PCA
+                n_components = TSTEPS//2 
+                reg = pca_fit(train_vec, tY[:, i, j], components=n_components, TSTEPS=TSTEPS, type='point')
+                tX_transform = pca_transform(train_vec, components=n_components, TSTEPS=TSTEPS, type='point') 
+                print('Train set R2: ', reg.score(tX_transform, tY[:, i, j]))
+                # ypred = pca_predict(vmskew, reg, n_components=n_components, TSTEPS=TSTEPS)
+                pass
 
 
+            # XXX: Predict (Validation)
+            # print(vX.shape, vY.shape)
+            # k = np.array([s, t]*vX.shape[0]).reshape(vX.shape[0], 2)
+            # val_vec = np.append(vX[:, :, i, j], k, axis=1)
+            # vYP = reg.predict(val_vec)
+            # vvY = vY[:, i, j]
+            # r2sc = r2_score(vvY, vYP, multioutput='raw_values')
+            # print('Test R2:', np.mean(r2sc))
 
+            # XXX: Save the model
+            import pickle
+            if dd != './gfigs':
+                with open('./point_feature_models/%s_ts_%s_%s_%s.pkl' %
+                          (model_name, TSTEPS, s, t), 'wb') as f:
+                    pickle.dump(reg, f)
+            else:
+                with open('./point_feature_models/%s_ts_%s_%s_%s_gfigs.pkl' %
+                          (model_name, TSTEPS, s, t), 'wb') as f:
+                    pickle.dump(reg, f)
 
-if __name__ == "__main__":
-    # tskew_pred(model='autoencoder', TSTEPS=10) 
-    # mskew_pred(model="autoencoder", TSTEPS=20)
-    for k in ['autoencoder']:
+def run_all_models():
+    for k in ['pca', 'autoencoder']:
         for j in [5, 10, 20]:
             mskew_pred(model_name=k, TSTEPS=j)
             tskew_pred(model_name=k, TSTEPS=j)
     # Do a run for the HAR method
-    tskew_pred(model='har', TSTEPS=32)
-    mskew_pred(model='har', TSTEPS=32)
+    tskew_pred(model_name='har', TSTEPS=32)
+    mskew_pred(model_name='har', TSTEPS=32)
+
+
+if __name__ == "__main__":
+    for i in ['./gfigs']:
+        for k in ['pca', 'autoencoder']:
+            for j in [5, 10, 20]:
+                mskew_pred(model_name=k, TSTEPS=j, dd=i)
+                tskew_pred(model_name=k, TSTEPS=j, dd=i)
+        # Do a run for the HAR method
+        # tskew_pred(model_name='har', TSTEPS=32, dd=i)
+        # mskew_pred(model_name='har', TSTEPS=32, dd=i)
+
+    # for i in ['./gfigs']:
+    #     print('Running for: ', i)
+    #     for k in ['pca']:
+    #         print('Running for: ', k)
+    #         for j in [5, 10, 20]:
+    #             print('Running for: ', j)
+    #             point_pred(model_name=k, TSTEPS=j, dd=i)
+    #     # Do a run for the HAR method
+    #     print('Running for: ', 'har')
+    #     point_pred(model_name='har', TSTEPS=32, dd=i)
