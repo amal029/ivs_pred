@@ -7,10 +7,12 @@ import matplotlib.pyplot as plt
 import glob
 from sklearn.metrics import root_mean_squared_error
 from sklearn.metrics import r2_score
+from sklearn.metrics import mean_absolute_error
 import dmtest
 # from mpl_toolkits.mplot3d import Axes3D
 import gzip
 import pandas as pd
+from sklearn.cross_decomposition import PLSCanonical
 
 
 def date_to_num(otype, date, dd='./figs'):
@@ -449,7 +451,7 @@ def getpreds(name1):
     return np.transpose(y), np.transpose(yp)
 
 
-def rmse_r2_time_series(fname, ax1, ax2, mm, m1, em):
+def rmse_r2_time_series(fname, ax1, ax2, mm, m1, em, bottom):
     mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
     # XXX: Now go through the TS
     tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
@@ -472,19 +474,37 @@ def rmse_r2_time_series(fname, ax1, ax2, mm, m1, em):
     date = date.date
     y = data[:, 1:MS*TS+1].astype(float, copy=False)
     yp = data[:, MS*TS+1:].astype(float, copy=False)
-    print(date.shape, y.shape, yp.shape)
+
+    years = [np.datetime64('%s-01-01' % i) for i in range(2014, 2024)]
+    ylabels = [str(i.astype('datetime64[Y]')) for i in years][:-1]
+    r2sc = [np.nan]*(len(years)-1)
+    for i in range(len(years)-1):
+        h = (date >= years[i]) & (date < years[i+1])
+        # XXX: Get the y and yp that are true
+        yi = y[h]
+        ypi = yp[h]
+        r2sc[i] = np.mean(r2_score(np.transpose(yi), np.transpose(ypi)))
+    # XXX: Clean it up to have a min value of 0
+    r2sc = [0 if i < 0 else i for i in r2sc]
 
     # XXX: Get the rolling RMSE
     rmses = root_mean_squared_error(np.transpose(y), np.transpose(yp),
                                     multioutput='raw_values')
-    r2cs = r2_score(np.transpose(y), np.transpose(yp),
-                    multioutput='raw_values')
+
+    mname = 'sridge' if mname == 'ridge' else mname
+    mname = 'slasso' if mname == 'lasso' else mname
+    mname = 'senet' if mname == 'enet' else mname
 
     ax1.plot(rmses, label='%s' % mname, marker=m1, markevery=em,
              linewidth=0.6)
-    ax2.plot(r2cs, label='%s' % mname, marker=m1, markevery=em,
-             linewidth=0.6)
-    return date
+    width = 0.55
+    bb = ax2.bar(ylabels, r2sc, label='%s' % mname, width=width, bottom=bottom)
+    lr2sc = ['']*len(r2sc)
+    for e, i in enumerate(r2sc):
+        lr2sc[e] = '%0.2f' % i if i > 0 else ''
+    ax2.bar_label(bb, labels=lr2sc, label_type='center')
+    return date, [r2sc[i]+bottom[i] if r2sc[i] >= 0 else bottom[i]
+                  for i in range(len(r2sc))]
 
 
 def overall(fname):
@@ -515,8 +535,7 @@ def overall(fname):
     rmses = root_mean_squared_error(np.transpose(y), np.transpose(yp),
                                     multioutput='raw_values')
     # mapes = mean_absolute_percentage_error(y, yp, multioutput='raw_values')
-    r2cs = r2_score(np.transpose(y), np.transpose(yp),
-                    multioutput='raw_values')
+    r2cs = r2_score(y, yp, multioutput='raw_values')
 
     return np.mean(rmses), np.std(rmses), np.mean(r2cs), np.std(r2cs)
 
@@ -634,25 +653,30 @@ def call_dmtest(otype):
 def call_timeseries(otype):
     # XXX: This is many models vs many other models
     # model_v_model()
+    models = ['pmridge', 'ridge', 'tskridge', 'mskridge']
     m1 = ['*', 'P', 'd', '8']
     for dd in ['figs', 'gfigs']:
         for ts in [5, 10, 20]:
-            fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, sharex=True)
-            for i, model in enumerate(['pmridge', 'ridge', 'tskridge',
-                                       'mskridge']):
+            fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1)
+            bottom = [0]*9
+            for i, model in enumerate(models):
                 # XXX: Do only the best ones
                 name = './final_results/%s_%s_ts_%s_model_%s.npy.gz' % (
                     otype, dd, ts, model)
-                dates = rmse_r2_time_series(name, ax1, ax2, model, m1[i],
-                                            em=0.999)
+                dates, bottom = rmse_r2_time_series(name, ax1, ax2,
+                                                    model, m1[i],
+                                                    em=0.999,
+                                                    bottom=bottom)
             EVERY = 400
-            ax2.set_xticks(range(0, dates.shape[0], EVERY),
+            ax1.set_xticks(range(0, dates.shape[0], EVERY),
                            labels=[dates[i]
                                    for i in range(0, dates.shape[0], EVERY)])
-            ax2.set_xlabel('Dates')
-            ax1.set_ylabel('RMSE')
-            ax2.set_ylabel(r'$R^2$')
-            ax2.legend()
+            # ax2.set_xlabel('Dates')
+            ax1.set_ylabel('RMSE (avg)')
+            ax2.set_ylabel(r'$R^2$ (avg)')
+            ax2.yaxis.set_ticklabels([])
+            ax1.legend(ncol=4)
+            ax2.legend(ncol=4)
             plt.xticks(fontsize=9, rotation=40)
             plt.savefig('./plots/%s_%s_rmse_r2_time_series_best_models_%s.pdf'
                         % (otype, dd, ts))
@@ -663,6 +687,9 @@ def call_overall(otype):
     # XXX: Now plot the overall RMSE, MAPE, and R2 for all models
     # average across all results.
     TTS = [20, 10, 5]
+    lmodels = ['sridge', 'slasso', 'senet', 'pmridge', 'pmlasso',
+               'pmenet', 'mskridge', 'msklasso', 'mskenet', 'tskridge',
+               'tsklasso', 'tskenet']
     models = ['ridge', 'lasso', 'enet', 'pmridge', 'pmlasso',
               'pmenet', 'mskridge', 'msklasso', 'mskenet', 'tskridge',
               'tsklasso', 'tskenet']
@@ -691,12 +718,12 @@ def call_overall(otype):
 
             # XXX: plot means
             fig, axs = plt.subplots(nrows=2, ncols=1, sharex=True)
-            bar0 = axs[0].bar(models, rmsemeans, width=0.2)
+            bar0 = axs[0].bar(lmodels, rmsemeans, width=0.2)
             axs[0].bar_label(bar0, fmt='%3.3f')
-            # bar1 = axs[1].bar(models, mapemeans, width=0.2, color='r')
+            # bar1 = axs[1].bar(lmodels, mapemeans, width=0.2, color='r')
             # if dd != 'gfigs':
             #     axs[1].bar_label(bar1, fmt='%3.3f')
-            bar2 = axs[1].bar(models, r2means, width=0.2, color='g')
+            bar2 = axs[1].bar(lmodels, r2means, width=0.2, color='g')
             axs[1].bar_label(bar2, fmt='%3.3f')
             axs[0].set_ylabel('RMSE (avg)')
             # axs[1].set_ylabel('MAPE (avg)')
@@ -708,11 +735,11 @@ def call_overall(otype):
 
             # XXX: Plot the std deviation
             fig, axs = plt.subplots(nrows=2, ncols=1, sharex=True)
-            bar0 = axs[0].bar(models, rmsestds, width=0.2)
+            bar0 = axs[0].bar(lmodels, rmsestds, width=0.2)
             axs[0].bar_label(bar0, fmt='%3.3f')
-            # bar1 = axs[1].bar(models, mapestds, width=0.2, color='r')
+            # bar1 = axs[1].bar(lmodels, mapestds, width=0.2, color='r')
             # axs[1].bar_label(bar1, fmt='%3.3f')
-            bar2 = axs[1].bar(models, r2stds, width=0.2, color='g')
+            bar2 = axs[1].bar(lmodels, r2stds, width=0.2, color='g')
             axs[1].bar_label(bar2, fmt='%3.3f')
             axs[0].set_ylabel('RMSE (std-dev)')
             # axs[1].set_ylabel('MAPE (std-dev)')
@@ -723,6 +750,83 @@ def call_overall(otype):
             plt.close(fig)
 
 
+def moneyness_term(fname, m, mi, t, tn, df, y=None, yp=None):
+    if y is None:
+        mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+        # XXX: Now go through the TS
+        tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
+                                          pred.TSTEP)]
+        MS = len(mms)
+        TS = len(tts)
+
+        otype = fname.split('/')[2].split('_')[0]
+        figss = fname.split('/')[2].split('_')[1]
+        mname = fname.split('/')[2].split('_')[5].split('.')[0]
+        mlags = fname.split('/')[2].split('_')[3]
+
+        print('Doing model: %s %s %s, Lags: %s' % (otype, figss, mname, mlags))
+
+        with gzip.open(filename=fname, mode='rb') as f:
+            data = np.load(f)
+
+        # XXX: Attach the date time for each y and yp
+        y = data[:, 1:MS*TS+1].astype(float, copy=False)
+        y = y.reshape(y.shape[0], MS, TS)
+        yp = data[:, MS*TS+1:].astype(float, copy=False)
+        yp = yp.reshape(yp.shape[0], MS, TS)
+
+    # XXX: Now get the square matrix that you want
+    yr = y[:, m[0]:m[1], t[0]:t[1]]
+    ypr = yp[:, m[0]:m[1], t[0]:t[1]]
+
+    # XXX: Now do r2_score for these and add to the df
+    yr = yr.reshape(yr.shape[0], yr.shape[1]*yr.shape[2])
+    ypr = ypr.reshape(ypr.shape[0], ypr.shape[1]*ypr.shape[2])
+    df[tn][mi] = r2_score(yr, ypr)
+    return y, yp
+
+
+def r2_score_mt(otype):
+    models = ['pmridge', 'tskridge']
+    TS = [20, 10, 5]
+    dds = ['figs', 'gfigs']
+    mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+    # XXX: Now go through the TS
+    tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
+                                      pred.TSTEP)]
+
+    itms = [i for i in mms if i > 0.8 and i <= 0.99]
+    atms = [i for i in mms if i > 0.99 and i <= 1.01]
+    otms = [i for i in mms if i > 1.01 and i <= 1.21]
+    ITM = (0, len(itms))
+    ATM = (ITM[1], ITM[1]+len(atms))
+    OTM = (ATM[1], ATM[1]+len(otms))
+    st = [i for i in tts if i <= 90/pred.DAYS]
+    STI = (0, len(st))
+    mt = [i for i in tts if i > 90/pred.DAYS and i <= 180/pred.DAYS]
+    MTI = (STI[1], STI[1]+len(mt))
+    lt = [i for i in tts if i > 180/pred.DAYS]
+    LTI = (MTI[1], MTI[1]+len(lt))
+    for dd in dds:
+        for ts in TS:
+            for i, model in enumerate(models):
+                name = './final_results/%s_%s_ts_%s_model_%s.npy.gz' % (
+                    otype, dd, ts, model)
+                # XXX: Make the different square matrices
+                df = pd.DataFrame({'m': ['itm', 'atm', 'otm'],
+                                   'st': [np.nan]*3, 'mt': [np.nan]*3,
+                                   'lt': [np.nan]*3})
+                y = None
+                yp = None
+                for mi, m in enumerate([ITM, ATM, OTM]):
+                    for t, tn in [(STI, 'st'), (MTI, 'mt'), (LTI, 'lt')]:
+                        y, yp = moneyness_term(name, m, mi, t, tn, df,
+                                               y, yp)
+                # XXX: Write the data frame to file
+                df.to_csv('./plots/mt_%s_%s_%s_%s.csv' % (model, otype, ts,
+                                                          dd))
+
+
 if __name__ == '__main__':
     plt.style.use('seaborn-v0_8-whitegrid')
 
@@ -730,13 +834,16 @@ if __name__ == '__main__':
     # for otype in ['call', 'put']:
     #     model_v_model(otype)
 
-    # for otype in ['call', 'put']:
+    for otype in ['call', 'put']:
     #     # XXX: Plot the bar graph for overall results
     #     call_overall(otype)
+        # XXX: Plot the best time series RMSE and MAPE
+        call_timeseries(otype)
 
-    #     # XXX: Plot the best time series RMSE and MAPE
-    #     call_timeseries(otype)
+    # for otype in ['call', 'put']:
+    #     # XXX: DM test across time (RMSE and R2)
+    #     call_dmtest(otype)
 
-    for otype in ['call', 'put']:
-        # XXX: DM test across time (RMSE and R2)
-        call_dmtest(otype)
+    # XXX: r2_score for moneyness and term structure
+    # for otype in ['call', 'put']:
+    #     r2_score_mt(otype)
