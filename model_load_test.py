@@ -123,9 +123,35 @@ def plot_hmap_features(vv, X, Y, name):
     plt.close(fig)
     # plt.show()
 
+def extract_features(X, t, model, dd, TSTEPS, feature_res, type='mskew'):
+    """
+    Returns the features extracted from the input data ready for prediction
+    using corrisponding model
+    """
+
+    import feature_extraction as fe
+    transform_type = type[1:]
+    if(model == 'pca'):
+        X = fe.pca_transform(X, feature_res, TSTEPS=TSTEPS, type=transform_type)
+    if(model == 'autoencoder'):
+        X = X.reshape(X.shape[0], X.shape[1]*X.shape[2])
+
+        # Load the encoder model
+        if dd == './figs':
+            toopen = './%s_feature_models/%s_ts_%s_%s_encoder.pkl' % (type, model, TSTEPS, t)
+        else:
+            toopen = './%s_feature_models/%s_ts_%s_%s_gfigs_encoder.pkl' % (type, model, TSTEPS, t)
+
+        encoder = keras.saving.load_model(toopen) 
+        # Get encoder
+        encoder = keras.Model(inputs=encoder.input, outputs=encoder.layers[-1].output)
+        X = encoder.predict(X)
+    else:
+        X = fe.har_transform(X, feature_res, TSTEPS=TSTEPS, type=transform_type)
+    return X
 
 def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
-         get_features=False, feature_res=10):
+        get_features=False, feature_res=10):
     # XXX: Num 3000 == '20140109'
     START_DATE = '20140109'
     END_DATE = '20221230'
@@ -289,6 +315,172 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                         plt.savefig(fname, bbox_inches='tight')
                         plt.close(fig)
 
+        if not plot:
+            out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
+            valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
+    elif model == 'mskautoencoder' or model == 'mskpca' or model == 'mskhar':
+        import feature_extraction as fe
+        # XXX: The output vector
+        out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
+        out = out.reshape(*valY.shape)
+        mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+        # XXX: Now go through the TS
+        tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
+                                          pred.TSTEP)]
+        import pickle
+        model_name = model[3:]
+        for j, t in enumerate(tts):
+            if dd == './figs':
+                with open('./mskew_feature_models/%s_ts_%s_%s.pkl' %
+                          (model_name, TSTEPS, t), 'rb') as f:
+                    m1 = pickle.load(f)
+            else:
+                with open('./mskew_feature_models/%s_ts_%s_%s_gfigs.pkl' %
+                          (model_name, TSTEPS, t), 'rb') as f:
+                    m1 = pickle.load(f)
+                    
+            mskew = valX[:, :, :, j]
+
+            # Extract features before prediction
+            mskew = extract_features(mskew, t, model_name, dd, TSTEPS, feature_res, type='mskew')
+
+            out[:, :, j] = m1.predict(mskew)
+
+            if get_features:
+                if j in TERM:
+                    X = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+                    labels = ['t-%s' % (i+1) for i in range(TSTEPS)[::-1]]
+                    markers = [(3+i, 1, 0) for i in range(TSTEPS)]
+                    for mts in MONEYNESS:
+                        # XXX: The term structure weights
+                        ws = m1.coef_[mts][:-1].reshape(TSTEPS, MS)
+                        # XXX: The term structure weight
+                        wms = m1.coef_[mts][-1]
+                        # XXX: Make sure that the term structure weight=nil
+                        assert (abs(wms) < 1e-4)
+                        # XXX: Now just plot the 2d curves
+                        fig, ax = plt.subplots()
+                        for i in range(TSTEPS):
+                            ax.plot(X, ws[i], marker=markers[i],
+                                    label=labels[i], markevery=0.1)
+                        ax.set_ylabel('Coefficient magnitudes')
+                        ax.set_xlabel('Moneyness')
+                        ax.legend(ncol=3)
+                        dfname = dd.split('/')[1]
+                        fname = './plots/%s_m_%s_t_%s_lags_%s_%s.pdf' % (
+                            model, X[mts], t, TSTEPS, dfname)
+                        plt.savefig(fname, bbox_inches='tight')
+                        plt.close(fig)
+            if not plot:
+                out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
+                valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
+
+
+
+    elif model == 'tskautoencoder' or model == 'tskpca' or model == 'tskhar':
+        import feature_extraction as fe
+        # XXX: The output vector
+        out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
+        out = out.reshape(*valY.shape)
+        mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+        # XXX: Go through the MS
+        import pickle
+        model_name = model[3:]
+        for j, m in enumerate(mms):
+            if dd == './figs':
+                with open('./tskew_feature_models/%s_ts_%s_%s.pkl' %
+                          (model_name, TSTEPS, m), 'rb') as f:
+                    m1 = pickle.load(f)
+            else:
+                with open('./tskew_feature_models/%s_ts_%s_%s_gfigs.pkl' %
+                          (model_name, TSTEPS, m), 'rb') as f:
+                    m1 = pickle.load(f)
+            tskew = valX[:, :, j]
+            tskew = tskew.reshape(tskew.shape[0],
+                                  tskew.shape[1]*tskew.shape[2])
+            
+            # Extract features before prediction
+            tskew = extract_features(tskew, m, model_name, dd, TSTEPS, feature_res, type='tskew')
+
+            # XXX: Predict the output
+            out[:, j] = m1.predict(tskew)
+
+            # XXX: Features plot
+            if get_features:
+                if j in MONEYNESS:
+                    X = [i/pred.DAYS
+                         for i in range(pred.LT, pred.UT+pred.TSTEP,
+                                        pred.TSTEP)]
+                    labels = ['t-%s' % (i+1) for i in range(TSTEPS)[::-1]]
+                    markers = [(3+i, 1, 0) for i in range(TSTEPS)]
+                    for mts in TERM:
+                        # XXX: The term structure weights
+                        ws = m1.coef_[mts][:-1].reshape(TSTEPS, TS)
+                        # XXX: The moneyness weight
+                        wms = m1.coef_[mts][-1]
+                        # XXX: Make sure that the moneyness weight is nothing
+                        assert (abs(wms) < 1e-4)
+                        # XXX: Now just plot the 2d curves
+                        fig, ax = plt.subplots()
+                        for i in range(TSTEPS):
+                            ax.plot(X, ws[i], marker=markers[i],
+                                    label=labels[i], markevery=0.1)
+                        ax.set_ylabel('Coefficient magnitudes')
+                        ax.set_xlabel('Term structure')
+                        ax.legend(ncol=3)
+                        dfname = dd.split('/')[1]
+                        fname = './plots/%s_m_%s_t_%s_lags_%s_%s.pdf' % (
+                            model, m, X[mts], TSTEPS, dfname)
+                        plt.savefig(fname, bbox_inches='tight')
+                        plt.close(fig)
+
+        if not plot:
+            out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
+            valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
+
+    elif model == 'pmkpca' or model == 'pmkhar':
+        import feature_extraction as fe
+        # XXX: The output vector
+        out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
+        out = out.reshape(*valY.shape)
+        # XXX: Now go through the MS and TS
+        mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+        tts = [i/pred.DAYS
+               for i in range(pred.LT, pred.UT+pred.TSTEP, pred.TSTEP)]
+        import pickle
+        model_name = model[3:]
+        for i, s in enumerate(mms):
+            for j, t in enumerate(tts):
+                if dd == './figs':
+                    with open('./point_feature_models/%s_ts_%s_%s_%s.pkl' %
+                              (model_name, TSTEPS, s, t), 'rb') as f:
+                        m1 = pickle.load(f)
+                else:
+                    with open('./point_feature_models/%s_ts_%s_%s_%s_gfigs.pkl' %
+                              (model_name, TSTEPS, s, t), 'rb') as f:
+                        m1 = pickle.load(f)
+                # XXX: Now make the prediction
+                k = np.array([s, t]*valX.shape[0]).reshape(valX.shape[0], 2)
+                val_vec = np.append(valX[:, :, i, j], k, axis=1)
+                # Extract features before prediction
+                val_vec = extract_features(val_vec, t, model_name, dd, TSTEPS, feature_res, type='point')
+                out[:, i, j] = m1.predict(val_vec)
+
+                # XXX: Feature vector plot
+                if get_features and model == 'pmridge':
+                    if i in MONEYNESS and j in TERM:
+                        fig, ax = plt.subplots()
+                        xaxis = ['t-%s' % (i+1) for i in (range(TSTEPS))[::-1]]
+                        xaxis.append(r'$\mu$')
+                        xaxis.append(r'$\tau$')
+                        ax.bar(xaxis, m1.coef_, color='b')
+                        ax.set_ylabel('Coefficient magnitudes')
+                        plt.xticks(fontsize=9, rotation=45)
+                        dfname = dd.split('/')[1]
+                        fname = './plots/%s_m_%s_t_%s_lags_%s_%s.pdf' % (
+                            model, s, t, TSTEPS, dfname)
+                        plt.savefig(fname, bbox_inches='tight')
+                        plt.close(fig)
         if not plot:
             out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
@@ -520,10 +712,11 @@ def overall(fname):
 
 def model_v_model():
     TTS = [20, 10, 5]
-    models = ['ridge', 'lasso',  # 'rf',
-              'enet',  # 'keras',
-              'pmridge', 'pmlasso', 'pmenet', 'mskridge',
-              'msklasso', 'mskenet', 'tskridge', 'tsklasso', 'tskenet']
+    # models = ['ridge', 'lasso',  # 'rf',
+    #           'enet',  # 'keras',
+    #           'pmridge', 'pmlasso', 'pmenet', 'mskridge',
+    #           'msklasso', 'mskenet', 'tskridge', 'tsklasso', 'tskenet']
+    models = ['autoencoder', 'pca','har' ]
     fp = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
                                                              len(models))
           for t in TTS}
