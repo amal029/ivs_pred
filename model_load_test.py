@@ -482,13 +482,13 @@ def rmse_r2_time_series(fname, ax1, ax2, mm, m1, em, bottom):
         # XXX: Get the y and yp that are true
         yi = y[h]
         ypi = yp[h]
-        plsc = PLSCanonical(n_components=1)
-        plsc.fit(ypi, yi)
-        ypir, yir = plsc.transform(ypi, yi)
-        corr = np.corrcoef(ypir[:, 0], yir[:, 0])[0, 1]
-        print('corr:', corr**2)
-        r2sc[i] = corr
-        # r2sc[i] = r2_score(yi, ypi)
+        # plsc = PLSCanonical(n_components=1)
+        # plsc.fit(ypi, yi)
+        # ypir, yir = plsc.transform(ypi, yi)
+        # corr = np.corrcoef(ypir[:, 0], yir[:, 0])[0, 1]
+        # print('corr:', corr**2)
+        # r2sc[i] = corr
+        r2sc[i] = r2_score(np.transpose(yi), np.transpose(ypi))
     # XXX: Clean it up to have a min value of 0
     r2sc = [0 if i < 0 else i for i in r2sc]
 
@@ -680,8 +680,10 @@ def call_timeseries(otype):
             ax1.set_ylabel('RMSE (avg)')
             ax2.set_ylabel(r'$R^2$ (avg)')
             ax2.yaxis.set_ticklabels([])
-            ax1.legend(ncol=4)
-            ax2.legend(ncol=4)
+            ax1.legend(ncol=4, loc='upper center', bbox_to_anchor=(0.5, 1.05),
+                       fancybox=True, shadow=True)
+            ax2.legend(ncol=4, loc='upper center', bbox_to_anchor=(0.5, 1.05),
+                       fancybox=True, shadow=True)
             plt.xticks(fontsize=9, rotation=40)
             plt.savefig('./plots/%s_%s_rmse_r2_time_series_best_models_%s.pdf'
                         % (otype, dd, ts))
