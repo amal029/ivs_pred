@@ -7,7 +7,6 @@ import matplotlib.pyplot as plt
 import glob
 from sklearn.metrics import root_mean_squared_error
 from sklearn.metrics import r2_score
-from sklearn.metrics import mean_absolute_error
 import dmtest
 # from mpl_toolkits.mplot3d import Axes3D
 import gzip
@@ -483,7 +482,13 @@ def rmse_r2_time_series(fname, ax1, ax2, mm, m1, em, bottom):
         # XXX: Get the y and yp that are true
         yi = y[h]
         ypi = yp[h]
-        r2sc[i] = np.mean(r2_score(np.transpose(yi), np.transpose(ypi)))
+        plsc = PLSCanonical(n_components=1)
+        plsc.fit(ypi, yi)
+        ypir, yir = plsc.transform(ypi, yi)
+        corr = np.corrcoef(ypir[:, 0], yir[:, 0])[0, 1]
+        print('corr:', corr**2)
+        r2sc[i] = corr
+        # r2sc[i] = r2_score(yi, ypi)
     # XXX: Clean it up to have a min value of 0
     r2sc = [0 if i < 0 else i for i in r2sc]
 
