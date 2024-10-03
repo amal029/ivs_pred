@@ -133,25 +133,30 @@ def extract_features(X, t, model, dd, TSTEPS, feature_res, type='mskew'):
     transform_type = type[1:]
     if(model == 'pca'):
         X = fe.pca_transform(X, feature_res, TSTEPS=TSTEPS, type=transform_type)
-    if(model == 'autoencoder'):
+    elif(model == 'autoencoder'):
         X = X.reshape(X.shape[0], X.shape[1]*X.shape[2])
 
         # Load the encoder model
         if dd == './figs':
-            toopen = './%s_feature_models/%s_ts_%s_%s_encoder.pkl' % (type, model, TSTEPS, t)
+            toopen = './%s_feature_models/%s_ts_%s_%s_encoder.keras' % (type, model, TSTEPS, t)
         else:
-            toopen = './%s_feature_models/%s_ts_%s_%s_gfigs_encoder.pkl' % (type, model, TSTEPS, t)
+            toopen = './%s_feature_models/%s_ts_%s_%s_encoder_gfigs.keras' % (type, model, TSTEPS, t)
 
         encoder = keras.saving.load_model(toopen) 
         # Get encoder
-        encoder = keras.Model(inputs=encoder.input, outputs=encoder.layers[-1].output)
+        encoder = keras.Model(inputs=encoder.input, outputs=encoder.layers[1].output)
         X = encoder.predict(X)
     else:
-        X = fe.har_transform(X, feature_res, TSTEPS=TSTEPS, type=transform_type)
+        X = fe.har_transform(X, TSTEPS=TSTEPS, type=transform_type)
     return X
 
 def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         get_features=False, feature_res=10):
+    # Har feature extraction model required 32 lags
+    if (model == 'mskhar' or model == 'tskhar' or model == 'pmkhar') and TSTEPS != 32:
+        feature_res = 3
+        TSTEPS = 32
+
     # XXX: Num 3000 == '20140109'
     START_DATE = '20140109'
     END_DATE = '20221230'
@@ -172,6 +177,8 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         bs = 40
     elif pred.TSTEPS == 20:
         bs = 20
+    elif pred.TSTEPS == 32: # Exception for har feature extraction
+        bs = 10
     else:
         raise Exception("TSTEPS not correct")
 
@@ -349,18 +356,18 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             if get_features:
                 if j in TERM:
                     X = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
-                    labels = ['t-%s' % (i+1) for i in range(TSTEPS)[::-1]]
-                    markers = [(3+i, 1, 0) for i in range(TSTEPS)]
+                    labels = ['t-%s' % (i+1) for i in range(feature_res)[::-1]]
+                    markers = [(3+i, 1, 0) for i in range(feature_res)]
                     for mts in MONEYNESS:
                         # XXX: The term structure weights
-                        ws = m1.coef_[mts][:-1].reshape(TSTEPS, MS)
-                        # XXX: The term structure weight
-                        wms = m1.coef_[mts][-1]
-                        # XXX: Make sure that the term structure weight=nil
-                        assert (abs(wms) < 1e-4)
+                        ws = m1.coef_[mts][:].reshape(feature_res, MS)
+                        # # # XXX: The term structure weight
+                        # wms = m1.coef_[mts][-1]
+                        # # XXX: Make sure that the term structure weight=nil
+                        # assert (abs(wms) < 1e-4)
                         # XXX: Now just plot the 2d curves
                         fig, ax = plt.subplots()
-                        for i in range(TSTEPS):
+                        for i in range(feature_res):
                             ax.plot(X, ws[i], marker=markers[i],
                                     label=labels[i], markevery=0.1)
                         ax.set_ylabel('Coefficient magnitudes')
@@ -371,9 +378,9 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                             model, X[mts], t, TSTEPS, dfname)
                         plt.savefig(fname, bbox_inches='tight')
                         plt.close(fig)
-            if not plot:
-                out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
-                valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
+        if not plot:
+            out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
+            valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
 
 
 
@@ -396,8 +403,6 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                           (model_name, TSTEPS, m), 'rb') as f:
                     m1 = pickle.load(f)
             tskew = valX[:, :, j]
-            tskew = tskew.reshape(tskew.shape[0],
-                                  tskew.shape[1]*tskew.shape[2])
             
             # Extract features before prediction
             tskew = extract_features(tskew, m, model_name, dd, TSTEPS, feature_res, type='tskew')
@@ -411,18 +416,18 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                     X = [i/pred.DAYS
                          for i in range(pred.LT, pred.UT+pred.TSTEP,
                                         pred.TSTEP)]
-                    labels = ['t-%s' % (i+1) for i in range(TSTEPS)[::-1]]
-                    markers = [(3+i, 1, 0) for i in range(TSTEPS)]
+                    labels = ['t-%s' % (i+1) for i in range(feature_res)[::-1]]
+                    markers = [(3+i, 1, 0) for i in range(feature_res)]
                     for mts in TERM:
                         # XXX: The term structure weights
-                        ws = m1.coef_[mts][:-1].reshape(TSTEPS, TS)
-                        # XXX: The moneyness weight
-                        wms = m1.coef_[mts][-1]
-                        # XXX: Make sure that the moneyness weight is nothing
-                        assert (abs(wms) < 1e-4)
+                        ws = m1.coef_[mts][:].reshape(feature_res, TS)
+                        # # XXX: The moneyness weight
+                        # wms = m1.coef_[mts][-1]
+                        # # XXX: Make sure that the moneyness weight is nothing
+                        # assert (abs(wms) < 1e-4)
                         # XXX: Now just plot the 2d curves
                         fig, ax = plt.subplots()
-                        for i in range(TSTEPS):
+                        for i in range(feature_res):
                             ax.plot(X, ws[i], marker=markers[i],
                                     label=labels[i], markevery=0.1)
                         ax.set_ylabel('Coefficient magnitudes')
@@ -438,7 +443,7 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
 
-    elif model == 'pmkpca' or model == 'pmkhar':
+    elif model == 'pmpca' or model == 'pmhar':
         import feature_extraction as fe
         # XXX: The output vector
         out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
@@ -448,7 +453,7 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         tts = [i/pred.DAYS
                for i in range(pred.LT, pred.UT+pred.TSTEP, pred.TSTEP)]
         import pickle
-        model_name = model[3:]
+        model_name = model[2:]
         for i, s in enumerate(mms):
             for j, t in enumerate(tts):
                 if dd == './figs':
@@ -470,7 +475,7 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                 if get_features and model == 'pmridge':
                     if i in MONEYNESS and j in TERM:
                         fig, ax = plt.subplots()
-                        xaxis = ['t-%s' % (i+1) for i in (range(TSTEPS))[::-1]]
+                        xaxis = ['t-%s' % (i+1) for i in (range(feature_res))[::-1]]
                         xaxis.append(r'$\mu$')
                         xaxis.append(r'$\tau$')
                         ax.bar(xaxis, m1.coef_, color='b')
@@ -716,7 +721,11 @@ def model_v_model():
     #           'enet',  # 'keras',
     #           'pmridge', 'pmlasso', 'pmenet', 'mskridge',
     #           'msklasso', 'mskenet', 'tskridge', 'tsklasso', 'tskenet']
-    models = ['autoencoder', 'pca','har' ]
+    models = [
+              'mskridge', 'mskautoencoder', 'mskpca',
+              'tskridge', 'tskautoencoder', 'tskpca', 
+              'pmridge', 'pmpca'
+              ]
     fp = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
                                                              len(models))
           for t in TTS}
@@ -727,16 +736,19 @@ def model_v_model():
     cache = {i: {j: {k: None for k in models} for j in TTS}
              for i in ['./figs', './gfigs']}
 
+
     for dd in ['./figs', './gfigs']:
         for t in fp.keys():
             for i in range(0, len(models)-1):
                 print('Comparing models with: ', dd, t, models[i])
                 for j in range(i+1, len(models)):
+                    feature_res = t//2
                     if cache[dd][t][models[i]] is None:
                         dates, y, yp = main(plot=False, TSTEPS=t,
                                             model=models[i],
                                             get_features=True,
-                                            dd=dd)
+                                            dd=dd,
+                                            feature_res=feature_res)
                         cache[dd][t][models[i]] = (dates, y, yp)
                     else:
                         _, y, yp = cache[dd][t][models[i]]
@@ -744,7 +756,8 @@ def model_v_model():
                         dates, yk, ypk = main(plot=False, TSTEPS=t,
                                               model=models[j],
                                               get_features=True,
-                                              dd=dd)
+                                              dd=dd,
+                                              feature_res=feature_res)
                         cache[dd][t][models[j]] = (dates, yk, ypk)
                     else:
                         _, yk, ypk = cache[dd][t][models[j]]
@@ -920,6 +933,7 @@ if __name__ == '__main__':
 
     # XXX: Plot the bar graph for overall results
     # call_overall()
+    model_v_model()
 
     # XXX: DM test across time (RMSE and R2)
-    call_dmtest()
+    # call_dmtest()
