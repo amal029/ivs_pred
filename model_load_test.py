@@ -9,9 +9,9 @@ from sklearn.metrics import root_mean_squared_error
 from sklearn.metrics import r2_score
 import dmtest
 # from mpl_toolkits.mplot3d import Axes3D
-import gzip
+# import gzip
 import pandas as pd
-from sklearn.cross_decomposition import PLSCanonical
+import blosc2
 
 
 def date_to_num(otype, date, dd='./figs'):
@@ -194,7 +194,8 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
 
-    elif model == 'pmridge' or model == 'pmlasso' or model == 'pmenet':
+    elif (model == 'pmridge' or model == 'pmlasso' or model == 'pmenet' or
+          model == 'pmpls'):
         # XXX: The output vector
         out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
         out = out.reshape(*valY.shape)
@@ -237,7 +238,8 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
 
-    elif model == 'tskenet' or model == 'tskridge' or model == 'tsklasso':
+    elif (model == 'tskenet' or model == 'tskridge' or model == 'tsklasso' or
+          model == 'tskpls'):
         # XXX: The output vector
         out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
         out = out.reshape(*valY.shape)
@@ -295,7 +297,8 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
 
-    elif model == 'mskenet' or model == 'mskridge' or model == 'msklasso':
+    elif (model == 'mskenet' or model == 'mskridge' or model == 'msklasso' or
+          model == 'mskpls'):
         # XXX: The output vector
         out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
         out = out.reshape(*valY.shape)
@@ -427,9 +430,10 @@ def save_results(otype, models, fp, cache):
                 dates = dates.reshape(y.shape[0], 1)
                 res = np.append(dates, y, axis=1)
                 res = np.append(res, o, axis=1)
-                with gzip.open(filename=tosave, mode='wb',
-                               compresslevel=6) as f:
-                    np.save(file=f, arr=res)
+                blosc2.save_array(res, tosave, mode='w')
+                # with gzip.open(filename=tosave, mode='wb',
+                #                compresslevel=3) as f:
+                #     np.save(file=f, arr=res)
 
 
 def getpreds(name1):
@@ -440,8 +444,9 @@ def getpreds(name1):
     MS = len(mms)
     TS = len(tts)
 
-    with gzip.open(filename=name1, mode='rb') as f:
-        data1 = np.load(f)
+    data1 = blosc2.load_array(name1)
+    # with gzip.open(filename=name1, mode='rb') as f:
+    #     data1 = np.load(f)
 
     y = data1[:, 1:MS*TS+1].astype(float, copy=False)
     yp = data1[:, MS*TS+1:].astype(float, copy=False)
@@ -465,8 +470,9 @@ def rmse_r2_time_series(fname, ax1, ax2, mm, m1, em, bottom):
 
     print('Doing model: %s %s %s, Lags: %s' % (otype, figss, mname, mlags))
 
-    with gzip.open(filename=fname, mode='rb') as f:
-        data = np.load(f)
+    data = blosc2.load_array(fname)
+    # with gzip.open(filename=fname, mode='rb') as f:
+    #     data = np.load(f)
 
     # XXX: Attach the date time for each y and yp
     date = pd.to_datetime(data[:, 0], format='%Y%m%d')
@@ -527,8 +533,9 @@ def overall(fname):
 
     print('Doing model: %s %s %s, Lags: %s' % (otype, figss, mname, mlags))
 
-    with gzip.open(filename=fname, mode='rb') as f:
-        data = np.load(f)
+    data = blosc2.load_array(fname)
+    # with gzip.open(filename=fname, mode='rb') as f:
+    #     data = np.load(f)
 
     # XXX: Attach the date time for each y and yp
     date = pd.to_datetime(data[:, 0], format='%Y%m%d')
@@ -548,9 +555,10 @@ def overall(fname):
 def model_v_model(otype):
     TTS = [20, 10, 5]
     models = ['ridge', 'lasso',  # 'rf',
-              'enet',  # 'keras',
-              'pmridge', 'pmlasso', 'pmenet', 'mskridge',
-              'msklasso', 'mskenet', 'tskridge', 'tsklasso', 'tskenet']
+              'enet', 'pls',  # 'keras',
+              'pmridge', 'pmlasso', 'pmenet', 'pmpls', 'mskridge',
+              'msklasso', 'mskenet', 'mskpls', 'tskridge',
+              'tsklasso', 'tskenet', 'tskpls']
     fp = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
                                                              len(models))
           for t in TTS}
@@ -605,9 +613,10 @@ def model_v_model(otype):
 
 def call_dmtest(otype):
     TTS = [20, 10, 5]
-    models = ['ridge', 'lasso', 'enet',
-              'pmridge', 'pmlasso', 'pmenet', 'mskridge',
-              'msklasso', 'mskenet', 'tskridge', 'tsklasso', 'tskenet']
+    models = ['ridge', 'lasso', 'enet', 'pls',
+              'pmridge', 'pmlasso', 'pmenet', 'pmpls', 'mskridge',
+              'msklasso', 'mskenet', 'mskpls', 'tskridge', 'tsklasso',
+              'tskenet', 'tskpls']
     fp = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
                                                              len(models))
           for t in TTS}
@@ -694,12 +703,12 @@ def call_overall(otype):
     # XXX: Now plot the overall RMSE, MAPE, and R2 for all models
     # average across all results.
     TTS = [20, 10, 5]
-    lmodels = ['sridge', 'slasso', 'senet', 'pmridge', 'pmlasso',
-               'pmenet', 'mskridge', 'msklasso', 'mskenet', 'tskridge',
-               'tsklasso', 'tskenet']
-    models = ['ridge', 'lasso', 'enet', 'pmridge', 'pmlasso',
-              'pmenet', 'mskridge', 'msklasso', 'mskenet', 'tskridge',
-              'tsklasso', 'tskenet']
+    lmodels = ['sridge', 'slasso', 'senet', 'spls', 'pmridge', 'pmlasso',
+               'pmenet', 'pmpls', 'mskridge', 'msklasso', 'mskenet', 'mskpls',
+               'tskridge', 'tsklasso', 'tskenet', 'tskpls']
+    models = ['ridge', 'lasso', 'enet', 'pls', 'pmridge', 'pmlasso',
+              'pmenet', 'pmpls', 'mskridge', 'msklasso', 'mskenet', 'mskpls',
+              'tskridge', 'tsklasso', 'tskenet', 'tskpls']
 
     # XXX: Do the overall RMSE, MAPE, and R2
     for dd in ['figs', 'gfigs']:
@@ -773,8 +782,9 @@ def moneyness_term(fname, m, mi, t, tn, df, y=None, yp=None):
 
         print('Doing model: %s %s %s, Lags: %s' % (otype, figss, mname, mlags))
 
-        with gzip.open(filename=fname, mode='rb') as f:
-            data = np.load(f)
+        data = blosc2.load_array(fname)
+        # with gzip.open(filename=fname, mode='rb') as f:
+        #     data = np.load(f)
 
         # XXX: Attach the date time for each y and yp
         y = data[:, 1:MS*TS+1].astype(float, copy=False)
@@ -841,16 +851,16 @@ if __name__ == '__main__':
     # for otype in ['call', 'put']:
     #     model_v_model(otype)
 
-    for otype in ['call', 'put']:
+    # for otype in ['call', 'put']:
     #     # XXX: Plot the bar graph for overall results
     #     call_overall(otype)
-        # XXX: Plot the best time series RMSE and MAPE
-        call_timeseries(otype)
+    #     # XXX: Plot the best time series RMSE and MAPE
+    #     call_timeseries(otype)
 
     # for otype in ['call', 'put']:
     #     # XXX: DM test across time (RMSE and R2)
     #     call_dmtest(otype)
 
-    # XXX: r2_score for moneyness and term structure
+    # # XXX: r2_score for moneyness and term structure
     # for otype in ['call', 'put']:
     #     r2_score_mt(otype)

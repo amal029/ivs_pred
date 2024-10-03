@@ -25,6 +25,7 @@ import keras
 # XXX: For plotting only
 import matplotlib.pyplot as plt
 # from sklearn.linear_model import SGDRegressor
+from sklearn.cross_decomposition import PLSRegression
 
 # XXX: Moneyness Bounds inclusive
 LM = 0.9
@@ -565,7 +566,7 @@ def plot_predicted_outputs_reg(vY, vYP, TSTEPS):
 
 
 def clean_data(tX, tY):
-    print("Cleaning data for gfigs")
+    # print("Cleaning data for gfigs")
     mask = np.isnan(tX)
     tX[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
                          tX[~mask])
@@ -634,6 +635,10 @@ def regression_predict(otype, dd='./figs', model='Ridge', TSTEPS=10):
                              n_estimators=100,
                              verbosity=2))
 
+    if model == 'pls':
+        tokeep = cca_comps(tX, tY, N_COMP=10)
+        treg = 'pls'
+        reg = PLSRegression(n_components=tokeep)
     reg.fit(tX, tY)
     print('Train set R2: ', reg.score(tX, tY))
 
@@ -749,9 +754,13 @@ def mskew_pred(otype, dd='./figs', model='mskridge', TSTEPS=5):
             reg = Ridge(fit_intercept=True, alpha=1)
         elif model == 'msklasso':
             reg = Lasso(fit_intercept=True, alpha=1)
+        elif model == 'mskpls':
+            tokeep = cca_comps(mskew, tYY)
+            reg = PLSRegression(n_components=tokeep)
         else:
             reg = ElasticNet(fit_intercept=True, alpha=1)
         reg.fit(mskew, tYY)
+        # print(reg.score(mskew, tYY))
         import pickle
         if dd != './gfigs':
             with open('./mskew_models/%s_ts_%s_%s_%s.pkl' %
@@ -796,9 +805,13 @@ def tskew_pred(otype, dd='./figs', model='tskridge', TSTEPS=5):
             reg = Ridge(fit_intercept=True, alpha=1)
         elif model == 'tsklasso':
             reg = Lasso(fit_intercept=True, alpha=1)
+        elif model == 'tskpls':
+            tokeep = cca_comps(tskew, tYY)
+            reg = PLSRegression(tokeep)
         else:
             reg = ElasticNet(fit_intercept=True, alpha=1)
         reg.fit(tskew, tYY)
+        # print(reg.score(tskew, tYY))
         import pickle
         if dd != './gfigs':
             with open('./tskew_models/%s_ts_%s_%s_%s.pkl' %
@@ -808,6 +821,29 @@ def tskew_pred(otype, dd='./figs', model='tskridge', TSTEPS=5):
             with open('./tskew_models/%s_ts_%s_%s_%s_gfigs.pkl' %
                       (model, lags, m, otype), 'wb') as f:
                 pickle.dump(reg, f)
+
+
+def cca_comps(X, y, N_COMP=None):
+    if N_COMP is None:
+        N_TARGETS = 1 if len(y.shape) == 1 else y.shape[1]
+        N_COMP_UB = min(X.shape[0], X.shape[1], N_TARGETS)
+        N_COMP = max(1, N_COMP_UB)
+
+    reg = PLSRegression(n_components=N_COMP)
+    reg.fit(X, y)
+    ypir, yir = reg.transform(X, y)
+    tokeep = 0
+    # print(N_COMP)
+    for i in range(N_COMP):
+        corr = np.corrcoef(ypir[:, i], yir[:, i])[0, 1]
+        # print(corr**2)
+        if corr**2 < 0.15:
+            break
+        else:
+            tokeep += 1
+    # XXX: The number of valid components to keep
+    tokeep = 1 if tokeep == 0 else tokeep
+    return tokeep
 
 
 def point_pred(otype, dd='./figs', model='pmridge', TSTEPS=10):
@@ -847,6 +883,9 @@ def point_pred(otype, dd='./figs', model='pmridge', TSTEPS=10):
                 reg = Ridge(fit_intercept=True, alpha=1)
             elif model == 'pmlasso':
                 reg = Lasso(fit_intercept=True, alpha=1)
+            elif model == 'pmpls':
+                tokeep = cca_comps(train_vec, tY[:, i, j])
+                reg = PLSRegression(n_components=tokeep)
             else:
                 reg = ElasticNet(fit_intercept=True, alpha=1,
                                  selection='random')
@@ -879,26 +918,35 @@ def linear_fit(otype):
     # command line)
     # XXX: Point regression
     for j in ['./figs', './gfigs']:
-        for k in ['pmridge', 'pmlasso', 'pmenet']:
+        for k in ['pmpls',
+                  # 'pmridge', 'pmlasso', 'pmenet'
+                  ]:
             for i in [5, 10, 20]:
                 print('Doing: %s_%s_%s' % (k, j, i))
                 point_pred(otype, dd=j, model=k, TSTEPS=i)
 
     # XXX: Moneyness skew regression
     for j in ['./figs', './gfigs']:
-        for k in ['mskridge', 'msklasso', 'mskenet']:
+        for k in ['mskpls',
+                  # 'mskridge', 'msklasso', 'mskenet'
+                  ]:
             for i in [5, 10, 20]:
                 print('Doing: %s_%s_%s' % (k, j, i))
                 mskew_pred(otype, dd=j, model=k, TSTEPS=i)
 
     # XXX: Term structure skew regression
     for j in ['./figs', './gfigs']:
-        for k in ['tskridge', 'tsklasso', 'tskenet']:
+        for k in ['tskpls',
+                  # 'tskridge', 'tsklasso', 'tskenet'
+                  ]:
             for i in [5, 10, 20]:
                 print('Doing: %s_%s_%s' % (k, j, i))
                 tskew_pred(otype, dd=j, model=k, TSTEPS=i)
 
-    for k in ['Ridge', 'Lasso', 'ElasticNet']:
+    # XXX: Surface regression
+    for k in ['pls',
+              # 'Ridge', 'Lasso', 'ElasticNet'
+              ]:
         for j in ['./figs', './gfigs']:
             for i in [5, 10, 20]:
                 print('Doing: %s_%s_%s' % (k, j, i))
