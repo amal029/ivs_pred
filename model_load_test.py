@@ -153,7 +153,7 @@ def extract_features(X, t, model, dd, TSTEPS, feature_res, type='mskew'):
 def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         get_features=False, feature_res=10):
     # Har feature extraction model required 32 lags
-    if (model == 'mskhar' or model == 'tskhar' or model == 'pmkhar') and TSTEPS != 32:
+    if (model == 'mskhar' or model == 'tskhar' or model == 'pmhar'):
         feature_res = 3
         TSTEPS = 32
 
@@ -472,12 +472,13 @@ def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                 out[:, i, j] = m1.predict(val_vec)
 
                 # XXX: Feature vector plot
-                if get_features and model == 'pmridge':
+                if get_features:
                     if i in MONEYNESS and j in TERM:
                         fig, ax = plt.subplots()
                         xaxis = ['t-%s' % (i+1) for i in (range(feature_res))[::-1]]
-                        xaxis.append(r'$\mu$')
-                        xaxis.append(r'$\tau$')
+                        if model == 'pmhar':
+                            xaxis.append(r'$\mu$')
+                            xaxis.append(r'$\tau$')
                         ax.bar(xaxis, m1.coef_, color='b')
                         ax.set_ylabel('Coefficient magnitudes')
                         plt.xticks(fontsize=9, rotation=45)
@@ -744,6 +745,9 @@ def model_v_model():
                 for j in range(i+1, len(models)):
                     feature_res = t//2
                     if cache[dd][t][models[i]] is None:
+                        # due to pca n_components restriction
+                        if models[i] in ['mskpca', 'tskpca', 'pmpca']:
+                            feature_res = t//4 
                         dates, y, yp = main(plot=False, TSTEPS=t,
                                             model=models[i],
                                             get_features=True,
@@ -837,12 +841,12 @@ def call_dmtest():
 def call_timeseries():
     # XXX: This is many models vs many other models
     # model_v_model()
-    m1 = ['*', 'P', 'd', '8']
+    m1 = ['*', 'P', 'd', '8', 's']
     for dd in ['figs', 'gfigs']:
         for ts in [5, 10, 20]:
             fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, sharex=True)
-            for i, model in enumerate(['pmridge', 'ridge', 'tskridge',
-                                       'mskridge']):
+            for i, model in enumerate(['pmridge', 'tskridge',
+                                       'mskridge', 'mskautoencoder', 'tskautoencoder']):
                 # XXX: Do only the best ones
                 name = './final_results/%s_ts_%s_model_%s.npy.gz' % (dd, ts,
                                                                      model)
@@ -899,7 +903,7 @@ def call_overall():
             # bar1 = axs[1].bar(models, mapemeans, width=0.2, color='r')
             # if dd != 'gfigs':
             #     axs[1].bar_label(bar1, fmt='%3.3f')
-            bar2 = axs[1].bar(models, r2means*100, width=0.2, color='g')
+            bar2 = axs[1].bar(models, r2means, width=0.2, color='g')
             axs[1].bar_label(bar2, fmt='%3.3f')
             axs[0].set_ylabel('RMSE (avg)')
             # axs[1].set_ylabel('MAPE (avg)')
