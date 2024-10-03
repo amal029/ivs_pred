@@ -766,7 +766,7 @@ def call_overall(otype):
             plt.close(fig)
 
 
-def moneyness_term(fname, m, mi, t, tn, df, y=None, yp=None):
+def moneyness_term(fname, m, mi, t, tn, df, df2, y=None, yp=None):
     if y is None:
         mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
         # XXX: Now go through the TS
@@ -800,11 +800,13 @@ def moneyness_term(fname, m, mi, t, tn, df, y=None, yp=None):
     yr = yr.reshape(yr.shape[0], yr.shape[1]*yr.shape[2])
     ypr = ypr.reshape(ypr.shape[0], ypr.shape[1]*ypr.shape[2])
     df[tn][mi] = r2_score(yr, ypr)
+    df2[tn][mi] = root_mean_squared_error(np.transpose(yr),
+                                          np.transpose(ypr))
     return y, yp
 
 
-def r2_score_mt(otype):
-    models = ['pmridge', 'tskridge']
+def r2_rmse_score_mt(otype, models=['tskridge', 'pmridge']):
+    assert (len(models) == 2)
     TS = [20, 10, 5]
     dds = ['figs', 'gfigs']
     mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
@@ -826,22 +828,72 @@ def r2_score_mt(otype):
     LTI = (MTI[1], MTI[1]+len(lt))
     for dd in dds:
         for ts in TS:
-            for i, model in enumerate(models):
-                name = './final_results/%s_%s_ts_%s_model_%s.npy.gz' % (
-                    otype, dd, ts, model)
-                # XXX: Make the different square matrices
-                df = pd.DataFrame({'m': ['itm', 'atm', 'otm'],
-                                   'st': [np.nan]*3, 'mt': [np.nan]*3,
-                                   'lt': [np.nan]*3})
-                y = None
-                yp = None
-                for mi, m in enumerate([ITM, ATM, OTM]):
-                    for t, tn in [(STI, 'st'), (MTI, 'mt'), (LTI, 'lt')]:
-                        y, yp = moneyness_term(name, m, mi, t, tn, df,
-                                               y, yp)
-                # XXX: Write the data frame to file
-                df.to_csv('./plots/mt_%s_%s_%s_%s.csv' % (model, otype, ts,
-                                                          dd))
+            # for i, model in enumerate(models):
+            model1 = models[0]
+            model2 = models[1]
+            name1 = './final_results/%s_%s_ts_%s_model_%s.npy.gz' % (
+                otype, dd, ts, model1)
+            name2 = './final_results/%s_%s_ts_%s_model_%s.npy.gz' % (
+                otype, dd, ts, model2)
+            # XXX: Make the different square matrices
+            df1 = pd.DataFrame({'m': ['itm', 'atm', 'otm'],
+                                'st': [np.nan]*3, 'mt': [np.nan]*3,
+                                'lt': [np.nan]*3})
+            df2 = pd.DataFrame({'m': ['itm', 'atm', 'otm'],
+                                'st': [np.nan]*3, 'mt': [np.nan]*3,
+                                'lt': [np.nan]*3})
+            df3 = pd.DataFrame({'m': ['itm', 'atm', 'otm'],
+                                'st': [np.nan]*3, 'mt': [np.nan]*3,
+                                'lt': [np.nan]*3})
+            df4 = pd.DataFrame({'m': ['itm', 'atm', 'otm'],
+                                'st': [np.nan]*3, 'mt': [np.nan]*3,
+                                'lt': [np.nan]*3})
+            dm = pd.DataFrame({'m': ['itm', 'atm', 'otm'],
+                               'st': [np.nan]*3, 'mt': [np.nan]*3,
+                               'lt': [np.nan]*3})
+            dmp = pd.DataFrame({'m': ['itm', 'atm', 'otm'],
+                                'st': [np.nan]*3, 'mt': [np.nan]*3,
+                                'lt': [np.nan]*3})
+
+            y1 = None
+            yp1 = None
+            y2 = None
+            yp2 = None
+            for mi, m in enumerate([ITM, ATM, OTM]):
+                for t, tn in [(STI, 'st'), (MTI, 'mt'), (LTI, 'lt')]:
+                    y1, yp1 = moneyness_term(name1, m, mi, t, tn, df1, df2,
+                                             y1, yp1)
+                    y2, yp2 = moneyness_term(name2, m, mi, t, tn, df3, df4,
+                                             y2, yp2)
+                    # XXX: Perform Diebold mariano test for yp1 and yp2
+                    assert (np.array_equal(y1, y2))
+                    yr = y1[:, m[0]:m[1], t[0]:t[1]]
+                    ypr1 = yp1[:, m[0]:m[1], t[0]:t[1]]
+                    ypr2 = yp2[:, m[0]:m[1], t[0]:t[1]]
+                    yr = yr.reshape(yr.shape[0], yr.shape[1]*yr.shape[2])
+                    ypr1 = ypr1.reshape(ypr1.shape[0],
+                                        ypr1.shape[1]*ypr1.shape[2])
+                    ypr2 = ypr2.reshape(ypr2.shape[0],
+                                        ypr2.shape[1]*ypr2.shape[2])
+                    dstat, pval = dmtest.dm_test(np.transpose(yr),
+                                                 np.transpose(ypr1),
+                                                 np.transpose(ypr2))
+                    dm[tn][mi] = dstat
+                    dmp[tn][mi] = pval
+
+            # XXX: Write the data frame to file
+            df1.to_csv('./plots/mt_%s_%s_%s_%s.csv' % (model1, otype, ts,
+                                                       dd))
+            df2.to_csv('./plots/mt_rmse_%s_%s_%s_%s.csv' % (model1, otype,
+                                                            ts, dd))
+            df3.to_csv('./plots/mt_%s_%s_%s_%s.csv' % (model2, otype, ts,
+                                                       dd))
+            df4.to_csv('./plots/mt_rmse_%s_%s_%s_%s.csv' % (model2, otype,
+                                                            ts, dd))
+            dm.to_csv('./plots/mt_rmse_dstat_%s_%s_%s_%s_%s.csv' % (
+                model1, model2, otype, ts, dd))
+            dmp.to_csv('./plots/mt_rmse_pval_%s_%s_%s_%s_%s.csv' % (
+                model1, model2, otype, ts, dd))
 
 
 if __name__ == '__main__':
@@ -861,6 +913,6 @@ if __name__ == '__main__':
     #     # XXX: DM test across time (RMSE and R2)
     #     call_dmtest(otype)
 
-    # # XXX: r2_score for moneyness and term structure
-    # for otype in ['call', 'put']:
-    #     r2_score_mt(otype)
+    # XXX: r2_score for moneyness and term structure
+    for otype in ['call', 'put']:
+        r2_rmse_score_mt(otype)
