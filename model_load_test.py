@@ -151,18 +151,13 @@ def extract_features(X, t, model, dd, TSTEPS, feature_res, type='mskew'):
         X = fe.har_transform(X, TSTEPS=TSTEPS, type=transform_type)
     return X
 
-<<<<<<< HEAD
-def main(dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
+def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         get_features=False, feature_res=10):
     # Har feature extraction model required 32 lags
     if (model == 'mskhar' or model == 'tskhar' or model == 'pmhar'):
         feature_res = 3
         TSTEPS = 32
 
-=======
-def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
-         get_features=False, feature_res=10):
->>>>>>> origin/main
     # XXX: Num 3000 == '20140109'
     START_DATE = '20140109'
     END_DATE = '20221230'
@@ -757,7 +752,6 @@ def overall(fname):
 
 def model_v_model(otype):
     TTS = [20, 10, 5]
-<<<<<<< HEAD
     # models = ['ridge', 'lasso',  # 'rf',
     #           'enet',  # 'keras',
     #           'pmridge', 'pmlasso', 'pmenet', 'mskridge',
@@ -767,13 +761,6 @@ def model_v_model(otype):
               'tskridge', 'tskautoencoder', 'tskpca', 
               'pmridge', 'pmpca'
               ]
-=======
-    models = ['ridge', 'lasso',  # 'rf',
-              'enet', 'pls',  # 'keras',
-              'pmridge', 'pmlasso', 'pmenet', 'pmpls', 'mskridge',
-              'msklasso', 'mskenet', 'mskpls', 'tskridge',
-              'tsklasso', 'tskenet', 'tskpls']
->>>>>>> origin/main
     fp = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
                                                              len(models))
           for t in TTS}
@@ -792,14 +779,10 @@ def model_v_model(otype):
                 for j in range(i+1, len(models)):
                     feature_res = t//2
                     if cache[dd][t][models[i]] is None:
-<<<<<<< HEAD
                         # due to pca n_components restriction
                         if models[i] in ['mskpca', 'tskpca', 'pmpca']:
                             feature_res = t//4 
                         dates, y, yp = main(plot=False, TSTEPS=t,
-=======
-                        dates, y, yp = main(otype, plot=False, TSTEPS=t,
->>>>>>> origin/main
                                             model=models[i],
                                             get_features=True,
                                             dd=dd,
@@ -893,14 +876,6 @@ def call_dmtest(otype):
 def call_timeseries(otype):
     # XXX: This is many models vs many other models
     # model_v_model()
-<<<<<<< HEAD
-    m1 = ['*', 'P', 'd', '8', 's']
-    for dd in ['figs', 'gfigs']:
-        for ts in [5, 10, 20]:
-            fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, sharex=True)
-            for i, model in enumerate(['pmridge', 'tskridge',
-                                       'mskridge', 'mskautoencoder', 'tskautoencoder']):
-=======
     models = ['pmridge', 'ridge', 'tskridge', 'mskridge']
     m1 = ['*', 'P', 'd', '8']
     for dd in ['figs', 'gfigs']:
@@ -908,7 +883,6 @@ def call_timeseries(otype):
             fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1)
             bottom = [0]*9
             for i, model in enumerate(models):
->>>>>>> origin/main
                 # XXX: Do only the best ones
                 name = './final_results/%s_%s_ts_%s_model_%s.npy.gz' % (
                     otype, dd, ts, model)
@@ -974,11 +948,7 @@ def call_overall(otype):
             # bar1 = axs[1].bar(lmodels, mapemeans, width=0.2, color='r')
             # if dd != 'gfigs':
             #     axs[1].bar_label(bar1, fmt='%3.3f')
-<<<<<<< HEAD
-            bar2 = axs[1].bar(models, r2means, width=0.2, color='g')
-=======
             bar2 = axs[1].bar(lmodels, r2means, width=0.2, color='g')
->>>>>>> origin/main
             axs[1].bar_label(bar2, fmt='%3.3f')
             axs[0].set_ylabel('RMSE (avg)')
             # axs[1].set_ylabel('MAPE (avg)')
@@ -1138,14 +1108,6 @@ def r2_rmse_score_mt(otype, models=['tskridge', 'pmridge']):
 if __name__ == '__main__':
     plt.style.use('seaborn-v0_8-whitegrid')
 
-<<<<<<< HEAD
-    # XXX: Plot the bar graph for overall results
-    # call_overall()
-    model_v_model()
-
-    # XXX: DM test across time (RMSE and R2)
-    # call_dmtest()
-=======
     # XXX: model vs model
     # for otype in ['call', 'put']:
     #     model_v_model(otype)
@@ -1163,4 +1125,3 @@ if __name__ == '__main__':
     # XXX: r2_score for moneyness and term structure
     for otype in ['call', 'put']:
         r2_rmse_score_mt(otype)
->>>>>>> origin/main

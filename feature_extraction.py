@@ -14,8 +14,53 @@ from sklearn.metrics import mean_absolute_percentage_error
 from sklearn.metrics import r2_score
 from keras.layers import Input, Dense
 from keras.models import Model
+from keras import ops
+from keras import layers
+import tensorflow as tf
 
 import pred
+
+def VAE(input_shape, intermediate_dim=512, latent_dim=2):
+    """
+    Variational Autoencoder model
+    """
+    # Encoder
+    inputs = Input(shape=input_shape, name='encoder_input')
+    x = Dense(intermediate_dim, activation='relu')(inputs)
+    z_mean = Dense(latent_dim, name='z_mean')(x)
+    z_log_var = Dense(latent_dim, name='z_log_var')(x)
+
+    def sampling(args):
+        z_mean, z_log_var = args
+        batch = ops.shape(z_mean)[0]
+        dim = ops.int_shape(z_mean)[1]
+        epsilon = ops.random_normal(shape=(batch, dim))
+        return z_mean + ops.exp(0.5 * z_log_var) * epsilon
+
+    # Sample from the latent space
+    z = layers.Lambda(sampling, output_shape=(latent_dim,), name='z')([z_mean, z_log_var])
+
+    # Encoder
+    encoder = Model(inputs, [z_mean, z_log_var, z], name='encoder')
+
+    # Decoder
+    latent_inputs = Input(shape=(latent_dim,), name='z_sampling')
+    x = Dense(intermediate_dim, activation='relu')(latent_inputs)
+    outputs = Dense(input_shape[0], activation='sigmoid')(x)
+    decoder = Model(latent_inputs, outputs, name='decoder')
+
+    # Instantiate the model
+    outputs = decoder(encoder(inputs)[2])
+    vae = keras.Model(inputs, outputs, name='vae_mlp')
+
+    # Loss
+    xent_loss = input_shape[0] * ops.binary_crossentropy(inputs, outputs)
+    kl_loss = - 0.5 * ops.sum(1 + z_log_var - ops.square(z_mean) - ops.exp(z_log_var), axis=-1)
+    vae_loss = ops.mean(xent_loss + kl_loss)
+
+    vae.add_loss(vae_loss)
+    vae.compile(optimizer='adam')
+    return vae
 
 class Autoencoder:
     def __init__(self, encoding_dim, input_shape):
@@ -170,13 +215,13 @@ def har_predict(valX, model, TSTEPS=32):
     valX_transform = har_transform(valX, TSTEPS=TSTEPS)
     return model.predict(valX_transform)    
 
-def tskew_pred(model_name='pca', TSTEPS=10, dd='./figs'):
+def tskew_pred(otype, model_name='pca', TSTEPS=10, dd='./figs'):
     # Check if directory exists
     if not os.path.exists('./tskew_feature_models'):
         os.makedirs('./tskew_feature_models')
 
     # Load data
-    tX, tY, vX, vY, _ = load_data(TSTEPS=TSTEPS, dd=dd)
+    tX, tY, vX, vY, _ = load_data(otype, TSTEPS=TSTEPS, dd=dd)
     tX = tX.reshape(tX.shape[:-1]) 
     vX = vX.reshape(vX.shape[:-1])
 
@@ -241,13 +286,13 @@ def tskew_pred(model_name='pca', TSTEPS=10, dd='./figs'):
                 pickle.dump(model, f)
 
 
-def mskew_pred(model_name='pca', TSTEPS=10, dd='./figs'):
+def mskew_pred(otype, model_name='pca', TSTEPS=10, dd='./figs'):
     # Check if directory exists
     if not os.path.exists('./mskew_feature_models'):
         os.makedirs('./mskew_feature_models')
 
     # Load data
-    tX, tY, vX, vY, _ = load_data(TSTEPS=TSTEPS, dd=dd)
+    tX, tY, vX, vY, _ = load_data(otype, TSTEPS=TSTEPS, dd=dd)
     tX = tX.reshape(tX.shape[:-1]) 
     vX = vX.reshape(vX.shape[:-1])
 
@@ -309,13 +354,13 @@ def mskew_pred(model_name='pca', TSTEPS=10, dd='./figs'):
             with open('./mskew_feature_models/%s_ts_%s_%s_gfigs.pkl' % (model_name, TSTEPS, t), 'wb') as f:
                 pickle.dump(model, f)
 
-def point_pred(model_name='pca', TSTEPS=10, dd='./figs'):
+def point_pred(otype, model_name='pca', TSTEPS=10, dd='./figs'):
     # Check if directory exists
     if not os.path.exists('./point_feature_models'):
         os.makedirs('./point_feature_models')
 
     # Load data
-    tX, tY, vX, vY, _ = load_data(TSTEPS=TSTEPS, dd=dd)
+    tX, tY, vX, vY, _ = load_data(otype, TSTEPS=TSTEPS, dd=dd)
     tX = tX.reshape(tX.shape[:-1]) 
     vX = vX.reshape(vX.shape[:-1])
 
@@ -398,14 +443,15 @@ def run_all_models():
 
 
 if __name__ == "__main__":
-    for i in ['./gfigs']:
-        for k in ['pca', 'autoencoder']:
-            for j in [5, 10, 20]:
-                mskew_pred(model_name=k, TSTEPS=j, dd=i)
-                tskew_pred(model_name=k, TSTEPS=j, dd=i)
-        # Do a run for the HAR method
-        # tskew_pred(model_name='har', TSTEPS=32, dd=i)
-        # mskew_pred(model_name='har', TSTEPS=32, dd=i)
+    for n in ['call', 'put']:
+        for i in ['./figs', './gfigs']:
+            for k in ['pca', 'autoencoder']:
+                for j in [5, 10, 20]:
+                    mskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
+                    tskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
+            # Do a run for the HAR method
+            # tskew_pred(model_name='har', TSTEPS=32, dd=i)
+            # mskew_pred(model_name='har', TSTEPS=32, dd=i)
 
     # for i in ['./gfigs']:
     #     print('Running for: ', i)
