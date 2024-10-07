@@ -25,6 +25,7 @@ import keras
 # XXX: For plotting only
 import matplotlib.pyplot as plt
 # from sklearn.linear_model import SGDRegressor
+from sklearn.cross_decomposition import PLSRegression
 
 # XXX: Moneyness Bounds inclusive
 LM = 0.9
@@ -39,12 +40,13 @@ TSTEP = 5                       # days
 DAYS = 365
 
 
-def preprocess_ivs_df(dfs: dict):
+def preprocess_ivs_df(dfs: dict, otype):
     toret = dict()
     for k in dfs.keys():
         df = dfs[k]
         # XXX: First only get those that have volume > 0
-        df = df[df['Volume'] > 0].reset_index(drop=True)
+        df = df[(df['Volume'] > 0) &
+                (df['Type'] == otype)].reset_index(drop=True)
         # XXX: Make the log of K/UnderlyingPrice
         df['m'] = (df['Strike']/df['UnderlyingPrice'])
         # XXX: Moneyness is not too far away from ATM
@@ -67,9 +69,9 @@ def preprocess_ivs_df(dfs: dict):
     return toret
 
 
-def plot_hmap(ivs_hmap, mrows, tcols, dd='figs'):
+def plot_hmap(ivs_hmap, mrows, tcols, otype, dd='figs'):
     for k in ivs_hmap.keys():
-        np.save('/tmp/%s/%s.npy' % (dd, k), ivs_hmap[k])
+        np.save('/tmp/%s_%s/%s.npy' % (otype, dd, k), ivs_hmap[k])
 
 
 def plot_ivs(ivs_surface, IVS='IVS', view='XY'):
@@ -113,12 +115,12 @@ def plot_ivs(ivs_surface, IVS='IVS', view='XY'):
         # img.save('/tmp/figs/{k}.png'.format(k=k))
 
 
-def load_data_for_keras(dd='./figs', START=0, NUM_IMAGES=1000, TSTEP=1):
+def load_data_for_keras(otype, dd='./figs', START=0, NUM_IMAGES=1000, TSTEP=1):
 
     Xs = list()               # Training inputs [0..TEST_IMAGES-1]
     Ys = list()               # Training outputs [1..TEST_IMAGES]
     Ysdates = list()
-    ff = sorted(glob.glob(dd+'/*.npy'))
+    ff = sorted(glob.glob('./'+otype+'_'+dd.split('/')[1]+'/*.npy'))
     # XXX: Load the first TEST_IMAGES for training
     # print('In load image!')
     for i in range(START, START+NUM_IMAGES):
@@ -230,7 +232,7 @@ def main(mdir, years, months, instrument, dfs: dict):
             dfs[key] = df
 
 
-def build_gird_and_images_gaussian(df):
+def build_gird_and_images_gaussian(df, otype):
     # print('building grid and fitting')
     # XXX: Now fit a multi-variate linear regression to the dataset
     # one for each day.
@@ -285,10 +287,10 @@ def build_gird_and_images_gaussian(df):
         # print('ivs hmap shape: ', ivs_surf_hmap[k].shape)
 
     # XXX: Plot the heatmap
-    plot_hmap(ivs_surf_hmap, mms, tts, dd='gfigs')
+    plot_hmap(ivs_surf_hmap, mms, tts, otype, dd='gfigs')
 
 
-def build_gird_and_images(df):
+def build_gird_and_images(df, otype):
     # print('building grid and fitting')
     # XXX: Now fit a multi-variate linear regression to the dataset
     # one for each day.
@@ -342,15 +344,15 @@ def build_gird_and_images(df):
         # print('ivs hmap shape: ', ivs_surf_hmap[k].shape)
 
     # XXX: Plot the heatmap
-    plot_hmap(ivs_surf_hmap, mms, tts)
+    plot_hmap(ivs_surf_hmap, mms, tts, otype)
 
     # XXX: Plot the ivs surface
     # plot_ivs(ivs_surface, view='XY')
 
 
-def excel_to_images(dvf=True):
+def excel_to_images(dvf=True, otype='call'):
     dir = '../../HistoricalOptionsData/'
-    years = [str(i) for i in range(2011, 2024)]
+    years = [str(i) for i in range(2002, 2024)]
     months = ['January', 'February',  'March', 'April', 'May', 'June', 'July',
               'August', 'September', 'October', 'November', 'December'
               ]
@@ -363,14 +365,14 @@ def excel_to_images(dvf=True):
         main(dir, years, months, i, dfs)
 
         # XXX: Now make ivs surface for each instrument
-        df = preprocess_ivs_df(dfs)
+        df = preprocess_ivs_df(dfs, otype)
 
         if dvf:
             # XXX: Build the 2d matrix with DVF
-            build_gird_and_images(df)
+            build_gird_and_images(df, otype)
         else:
             # XXX: Build the 2d matrix with NW
-            build_gird_and_images_gaussian(df)
+            build_gird_and_images_gaussian(df, otype)
 
 
 def build_keras_model(shape, inner_filters, bs, LR=1e-3):
@@ -484,7 +486,7 @@ def keras_model_fit(model, trainX, trainY, valX, valY, batch_size):
     return history
 
 
-def load_data(dd='./figs', TSTEPS=10):
+def load_data(otype, dd='./figs', TSTEPS=10):
     NIMAGES1 = 2000
     # XXX: This is very important. If too long then changes are not
     # shown. If too short then too much influence from previous lags.
@@ -492,7 +494,7 @@ def load_data(dd='./figs', TSTEPS=10):
     START = 0
 
     # Load, process and learn a ConvLSTM2D network
-    trainX, trainY, _ = load_data_for_keras(dd=dd,
+    trainX, trainY, _ = load_data_for_keras(otype, dd=dd,
                                             START=START, NUM_IMAGES=NIMAGES1,
                                             TSTEP=TSTEPS)
     # print(trainX.shape, trainY.shape)
@@ -505,7 +507,8 @@ def load_data(dd='./figs', TSTEPS=10):
     NIMAGES2 = 1000
     START = START+NIMAGES1
 
-    valX, valY, _ = load_data_for_keras(START=START, NUM_IMAGES=NIMAGES2,
+    valX, valY, _ = load_data_for_keras(otype, dd=dd, START=START,
+                                        NUM_IMAGES=NIMAGES2,
                                         TSTEP=TSTEPS)
     # print(valX.shape, valY.shape)
     valX = valX.reshape(valX.shape[0]//TSTEPS, TSTEPS, *valX.shape[1:], 1)
@@ -515,10 +518,6 @@ def load_data(dd='./figs', TSTEPS=10):
 
 
 def plot_predicted_outputs_reg(vY, vYP, TSTEPS):
-
-    def num_to_date(num, dd='./figs'):
-        ff = sorted(glob.glob(dd+'/*.npy'))
-        return ff[num].split('/')[-1].split('.')[0]
 
     # XXX: The moneyness
     MS = np.arange(LM, UM+MSTEP, MSTEP)
@@ -567,7 +566,7 @@ def plot_predicted_outputs_reg(vY, vYP, TSTEPS):
 
 
 def clean_data(tX, tY):
-    print("Cleaning data for gfigs")
+    # print("Cleaning data for gfigs")
     mask = np.isnan(tX)
     tX[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
                          tX[~mask])
@@ -577,9 +576,9 @@ def clean_data(tX, tY):
     return tX, tY
 
 
-def regression_predict(dd='./figs', model='Ridge', TSTEPS=10):
+def regression_predict(otype, dd='./figs', model='Ridge', TSTEPS=10):
     # XXX: We will need to do steps 5, 10 and 20
-    tX, tY, vX, vY, lags = load_data(dd=dd, TSTEPS=TSTEPS)
+    tX, tY, vX, vY, lags = load_data(otype, dd=dd, TSTEPS=TSTEPS)
     tX = tX.reshape(tX.shape[:-1])
     vX = vX.reshape(vX.shape[:-1])
     # tX = np.append(tX, vX, axis=0)
@@ -636,6 +635,10 @@ def regression_predict(dd='./figs', model='Ridge', TSTEPS=10):
                              n_estimators=100,
                              verbosity=2))
 
+    if model == 'pls':
+        tokeep = cca_comps(tX, tY, N_COMP=10)
+        treg = 'pls'
+        reg = PLSRegression(n_components=tokeep)
     reg.fit(tX, tY)
     print('Train set R2: ', reg.score(tX, tY))
 
@@ -655,12 +658,12 @@ def regression_predict(dd='./figs', model='Ridge', TSTEPS=10):
     # XXX: Save the model
     import pickle
     if dd != './gfigs':
-        with open('./surf_models/model_%s_ts_%s.pkl' %
-                  (treg, lags), 'wb') as f:
+        with open('./surf_models/model_%s_ts_%s_%s.pkl' %
+                  (treg, lags, otype), 'wb') as f:
             pickle.dump(reg, f)
     else:
-        with open('./surf_models/model_%s_ts_%s_gfigs.pkl' %
-                  (treg, lags), 'wb') as f:
+        with open('./surf_models/model_%s_ts_%s_%s_gfigs.pkl' %
+                  (treg, lags, otype), 'wb') as f:
             pickle.dump(reg, f)
 
 
@@ -718,9 +721,9 @@ def convlstm_predict(dd='./figs'):
                                                         inner_filters))
 
 
-def mskew_pred(dd='./figs', model='mskridge', TSTEPS=5):
+def mskew_pred(otype, dd='./figs', model='mskridge', TSTEPS=5):
     # XXX: We will need to do steps 5, 10 and 20
-    tX, tY, vX, vY, lags = load_data(dd=dd, TSTEPS=TSTEPS)
+    tX, tY, vX, vY, lags = load_data(otype, dd=dd, TSTEPS=TSTEPS)
     tX = tX.reshape(tX.shape[:-1])
     vX = vX.reshape(vX.shape[:-1])
 
@@ -751,23 +754,27 @@ def mskew_pred(dd='./figs', model='mskridge', TSTEPS=5):
             reg = Ridge(fit_intercept=True, alpha=1)
         elif model == 'msklasso':
             reg = Lasso(fit_intercept=True, alpha=1)
+        elif model == 'mskpls':
+            tokeep = cca_comps(mskew, tYY)
+            reg = PLSRegression(n_components=tokeep)
         else:
             reg = ElasticNet(fit_intercept=True, alpha=1)
         reg.fit(mskew, tYY)
+        # print(reg.score(mskew, tYY))
         import pickle
         if dd != './gfigs':
-            with open('./mskew_models/%s_ts_%s_%s.pkl' %
-                      (model, lags, t), 'wb') as f:
+            with open('./mskew_models/%s_ts_%s_%s_%s.pkl' %
+                      (model, lags, t, otype), 'wb') as f:
                 pickle.dump(reg, f)
         else:
-            with open('./mskew_models/%s_ts_%s_%s_gfigs.pkl' %
-                      (model, lags, t), 'wb') as f:
+            with open('./mskew_models/%s_ts_%s_%s_%s_gfigs.pkl' %
+                      (model, lags, t, otype), 'wb') as f:
                 pickle.dump(reg, f)
 
 
-def tskew_pred(dd='./figs', model='tskridge', TSTEPS=5):
+def tskew_pred(otype, dd='./figs', model='tskridge', TSTEPS=5):
     # XXX: We will need to do steps 5, 10 and 20
-    tX, tY, vX, vY, lags = load_data(dd=dd, TSTEPS=TSTEPS)
+    tX, tY, vX, vY, lags = load_data(otype, dd=dd, TSTEPS=TSTEPS)
     tX = tX.reshape(tX.shape[:-1])
     vX = vX.reshape(vX.shape[:-1])
 
@@ -798,23 +805,50 @@ def tskew_pred(dd='./figs', model='tskridge', TSTEPS=5):
             reg = Ridge(fit_intercept=True, alpha=1)
         elif model == 'tsklasso':
             reg = Lasso(fit_intercept=True, alpha=1)
+        elif model == 'tskpls':
+            tokeep = cca_comps(tskew, tYY)
+            reg = PLSRegression(tokeep)
         else:
             reg = ElasticNet(fit_intercept=True, alpha=1)
         reg.fit(tskew, tYY)
+        # print(reg.score(tskew, tYY))
         import pickle
         if dd != './gfigs':
-            with open('./tskew_models/%s_ts_%s_%s.pkl' %
-                      (model, lags, m), 'wb') as f:
+            with open('./tskew_models/%s_ts_%s_%s_%s.pkl' %
+                      (model, lags, m, otype), 'wb') as f:
                 pickle.dump(reg, f)
         else:
-            with open('./tskew_models/%s_ts_%s_%s_gfigs.pkl' %
-                      (model, lags, m), 'wb') as f:
+            with open('./tskew_models/%s_ts_%s_%s_%s_gfigs.pkl' %
+                      (model, lags, m, otype), 'wb') as f:
                 pickle.dump(reg, f)
 
 
-def point_pred(dd='./figs', model='pmridge', TSTEPS=10):
+def cca_comps(X, y, N_COMP=None):
+    if N_COMP is None:
+        N_TARGETS = 1 if len(y.shape) == 1 else y.shape[1]
+        N_COMP_UB = min(X.shape[0], X.shape[1], N_TARGETS)
+        N_COMP = max(1, N_COMP_UB)
+
+    reg = PLSRegression(n_components=N_COMP)
+    reg.fit(X, y)
+    ypir, yir = reg.transform(X, y)
+    tokeep = 0
+    # print(N_COMP)
+    for i in range(N_COMP):
+        corr = np.corrcoef(ypir[:, i], yir[:, i])[0, 1]
+        # print(corr**2)
+        if corr**2 < 0.15:
+            break
+        else:
+            tokeep += 1
+    # XXX: The number of valid components to keep
+    tokeep = 1 if tokeep == 0 else tokeep
+    return tokeep
+
+
+def point_pred(otype, dd='./figs', model='pmridge', TSTEPS=10):
     # XXX: We will need to do steps 5, 10 and 20
-    tX, tY, vX, vY, lags = load_data(dd=dd, TSTEPS=TSTEPS)
+    tX, tY, vX, vY, lags = load_data(otype, dd=dd, TSTEPS=TSTEPS)
     tX = tX.reshape(tX.shape[:-1])
     vX = vX.reshape(vX.shape[:-1])
     # tX = np.append(tX, vX, axis=0)
@@ -849,6 +883,9 @@ def point_pred(dd='./figs', model='pmridge', TSTEPS=10):
                 reg = Ridge(fit_intercept=True, alpha=1)
             elif model == 'pmlasso':
                 reg = Lasso(fit_intercept=True, alpha=1)
+            elif model == 'pmpls':
+                tokeep = cca_comps(train_vec, tY[:, i, j])
+                reg = PLSRegression(n_components=tokeep)
             else:
                 reg = ElasticNet(fit_intercept=True, alpha=1,
                                  selection='random')
@@ -867,50 +904,68 @@ def point_pred(dd='./figs', model='pmridge', TSTEPS=10):
             # XXX: Save the model
             import pickle
             if dd != './gfigs':
-                with open('./point_models/%s_ts_%s_%s_%s.pkl' %
-                          (model, lags, s, t), 'wb') as f:
+                with open('./point_models/%s_ts_%s_%s_%s_%s.pkl' %
+                          (model, lags, s, t, otype), 'wb') as f:
                     pickle.dump(reg, f)
             else:
-                with open('./point_models/%s_ts_%s_%s_%s_gfigs.pkl' %
-                          (model, lags, s, t), 'wb') as f:
+                with open('./point_models/%s_ts_%s_%s_%s_%s_gfigs.pkl' %
+                          (model, lags, s, t, otype), 'wb') as f:
                     pickle.dump(reg, f)
+
+
+def linear_fit(otype):
+    # Surface regression prediction (RUN THIS WITH OMP_NUM_THREADS=10 on
+    # command line)
+    # XXX: Point regression
+    for j in ['./figs', './gfigs']:
+        for k in ['pmpls',
+                  # 'pmridge', 'pmlasso', 'pmenet'
+                  ]:
+            for i in [5, 10, 20]:
+                print('Doing: %s_%s_%s' % (k, j, i))
+                point_pred(otype, dd=j, model=k, TSTEPS=i)
+
+    # XXX: Moneyness skew regression
+    for j in ['./figs', './gfigs']:
+        for k in ['mskpls',
+                  # 'mskridge', 'msklasso', 'mskenet'
+                  ]:
+            for i in [5, 10, 20]:
+                print('Doing: %s_%s_%s' % (k, j, i))
+                mskew_pred(otype, dd=j, model=k, TSTEPS=i)
+
+    # XXX: Term structure skew regression
+    for j in ['./figs', './gfigs']:
+        for k in ['tskpls',
+                  # 'tskridge', 'tsklasso', 'tskenet'
+                  ]:
+            for i in [5, 10, 20]:
+                print('Doing: %s_%s_%s' % (k, j, i))
+                tskew_pred(otype, dd=j, model=k, TSTEPS=i)
+
+    # XXX: Surface regression
+    for k in ['pls',
+              # 'Ridge', 'Lasso', 'ElasticNet'
+              ]:
+        for j in ['./figs', './gfigs']:
+            for i in [5, 10, 20]:
+                print('Doing: %s_%s_%s' % (k, j, i))
+                regression_predict(otype, model=k, dd=j, TSTEPS=i)
 
 
 if __name__ == '__main__':
     # XXX: Excel data to images
-    # excel_to_images(dvf=False)
+    # excel_to_images(otype='call')  # call options with linear fit
+    # excel_to_images(otype='put')  # put options with linear fit
+
+    # XXX: Non-parametric regression for calls
+    # excel_to_images(otype='call', dvf=False)
+    # XXX: Non-parametric regression for puts
+    # excel_to_images(otype='put', dvf=False)
+
+    # XXX: Fit the linear models
+    for otype in ['call', 'put']:
+        linear_fit(otype)
 
     # XXX: ConvLSTM2D prediction
     # convlstm_predict(dd='./gfigs')
-
-    # Surface regression prediction (RUN THIS WITH OMP_NUM_THREADS=10 on
-    # command line)
-    for k in ['Ridge',  # 'OLS',
-              # 'RF',
-              'Lasso',
-              'ElasticNet']:
-        for j in ['./figs', './gfigs']:
-            for i in [5, 10, 20]:
-                print('Doing: %s_%s_%s' % (k, j, i))
-                regression_predict(model=k, dd=j, TSTEPS=i)
-
-    # XXX: Point regression
-    for j in ['./figs', './gfigs']:
-        for k in ['pmridge', 'pmlasso', 'pmenet']:
-            for i in [5, 10, 20]:
-                print('Doing: %s_%s_%s' % (k, j, i))
-                point_pred(dd=j, model=k, TSTEPS=i)
-
-    # XXX: Moneyness skew regression
-    for j in ['./figs', './gfigs']:
-        for k in ['mskridge', 'msklasso', 'mskenet']:
-            for i in [5, 10, 20]:
-                print('Doing: %s_%s_%s' % (k, j, i))
-                mskew_pred(dd=j, model=k, TSTEPS=i)
-
-    # XXX: Term structure skew regression
-    for j in ['./figs', './gfigs']:
-        for k in ['tskridge', 'tsklasso', 'tskenet']:
-            for i in [5, 10, 20]:
-                print('Doing: %s_%s_%s' % (k, j, i))
-                tskew_pred(dd=j, model=k, TSTEPS=i)
