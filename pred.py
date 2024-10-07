@@ -26,6 +26,7 @@ import keras
 import matplotlib.pyplot as plt
 # from sklearn.linear_model import SGDRegressor
 from sklearn.cross_decomposition import PLSRegression
+from scipy.stats import norm
 
 # XXX: Moneyness Bounds inclusive
 LM = 0.9
@@ -38,6 +39,79 @@ UT = 366
 TSTEP = 5                       # days
 
 DAYS = 365
+
+
+def getr(row, mk):
+    """otype: the type of option
+       row: row of the dataframe
+       row[delta]: the delta greek
+       row[tau]: the time to expiry (days left)/365
+       row[S]: current underlying price
+       row[K]: strike price
+       row[sigma]: volatility
+    return: risk free interest rate
+    """
+
+    delta = row['Delta']
+    sigma = row['IV']
+    t = row['tau']
+    S = row['UnderlyingPrice']
+    K = row['Strike']
+    otype = row['Type']
+
+    if otype == 'call':
+        d1 = norm.ppf(delta)
+    else:
+        d1 = norm.ppf(1 + delta)
+    # XXX: Now compute the interest rate
+    r = ((d1 * sigma * np.sqrt(t)) - np.log(S/K))/t - (sigma**2/2)
+    # XXX: DEBUG
+    dd1 = 1/(sigma*np.sqrt(t)) * (np.log(S/K) + (r + sigma**2/2)*t)
+    if otype == 'call':
+        if not np.isclose(delta, norm.cdf(dd1)):
+            print('call:', delta, norm.cdf(dd1), mk)
+            print('d1:', d1)
+            print(row)
+    else:
+        if not np.isclose(delta, norm.cdf(dd1)-1):
+            print('put: ', delta, norm.cdf(dd1)-1, mk)
+            print('d1:', d1)
+            print(row)
+    return r
+
+
+# XXX: 20220322 has a number of nans
+def interest_rates(dfs: dict):
+    for k in dfs.keys():
+        df = dfs[k]
+        # XXX: First only get those that have volume > 0
+        df = df[df['Volume'] > 0].reset_index(drop=True)
+        # XXX: Make the log of K/UnderlyingPrice
+        df['m'] = (df['Strike']/df['UnderlyingPrice'])
+        # XXX: Moneyness is not too far away from ATM
+        df = df[(df['m'] >= LM) & (df['m'] <= UM)]
+        # XXX: Make the days to expiration
+        df['Expiration'] = pd.to_datetime(df['Expiration'])
+        df['DataDate'] = pd.to_datetime(df['DataDate'])
+        df['tau'] = (df['Expiration'] - df['DataDate']).dt.days
+        # XXX: Only those that are greater than at least 2 weeks ahead
+        # and also not too ahead
+        df = df[(df['tau'] >= LT) & (df['tau'] <= UT)]
+        df['tau'] = df['tau']/DAYS
+
+        # XXX: implied volatility is not zero!
+        df = df[df['IV'] != 0]
+
+        # XXX: Compute the interest rates
+        dfr = df[['Delta', 'tau', 'UnderlyingPrice', 'Strike', 'IV', 'Type']]
+        df['InterestR'] = dfr.apply(lambda d: getr(d, k), axis=1)
+        df['ForwardP'] = df['UnderlyingPrice']*np.exp(
+            df['InterestR']*df['tau'])
+        df['Mid'] = (df['Ask'] + df['Bid'])/2
+        # XXX: Numpy array
+        dfr = df.drop(['AKA', 'Exchange'], axis=1)
+        dfr = dfr.reset_index(drop=True)
+        dfr.to_csv('./interest_rates/%s.csv' % (k))
 
 
 def preprocess_ivs_df(dfs: dict, otype):
@@ -62,7 +136,6 @@ def preprocess_ivs_df(dfs: dict, otype):
         df['m2'] = df['m']**2
         df['tau2'] = df['tau']**2
         df['mtau'] = df['m']*df['tau']
-
         # XXX: This is the final dataframe
         dff = df[['IV', 'm', 'tau', 'm2', 'tau2', 'mtau']]
         toret[k] = dff.reset_index(drop=True)
@@ -350,12 +423,15 @@ def build_gird_and_images(df, otype):
     # plot_ivs(ivs_surface, view='XY')
 
 
-def excel_to_images(dvf=True, otype='call'):
+def excel_to_images(dvf=True, otype='call', ironly=False):
     dir = '../../HistoricalOptionsData/'
     years = [str(i) for i in range(2002, 2024)]
-    months = ['January', 'February',  'March', 'April', 'May', 'June', 'July',
-              'August', 'September', 'October', 'November', 'December'
-              ]
+    months = [
+        'January', 'February',
+        'March',
+        'April', 'May', 'June', 'July',
+        'August', 'September', 'October', 'November', 'December'
+    ]
     instrument = ["SPX"]
     dfs = dict()
     # XXX: The dictionary of all the dataframes with the requires
@@ -364,15 +440,18 @@ def excel_to_images(dvf=True, otype='call'):
         # XXX: Load the excel files
         main(dir, years, months, i, dfs)
 
-        # XXX: Now make ivs surface for each instrument
-        df = preprocess_ivs_df(dfs, otype)
-
-        if dvf:
-            # XXX: Build the 2d matrix with DVF
-            build_gird_and_images(df, otype)
+        if ironly:
+            interest_rates(dfs)
         else:
-            # XXX: Build the 2d matrix with NW
-            build_gird_and_images_gaussian(df, otype)
+            # XXX: Now make ivs surface for each instrument
+            df = preprocess_ivs_df(dfs, otype)
+
+            if dvf:
+                # XXX: Build the 2d matrix with DVF
+                build_gird_and_images(df, otype)
+            else:
+                # XXX: Build the 2d matrix with NW
+                build_gird_and_images_gaussian(df, otype)
 
 
 def build_keras_model(shape, inner_filters, bs, LR=1e-3):
@@ -964,8 +1043,11 @@ if __name__ == '__main__':
     # excel_to_images(otype='put', dvf=False)
 
     # XXX: Fit the linear models
-    for otype in ['call', 'put']:
-        linear_fit(otype)
+    # for otype in ['call', 'put']:
+    #     linear_fit(otype)
+
+    # XXX: Get interest rates and forward prices
+    excel_to_images(ironly=True)
 
     # XXX: ConvLSTM2D prediction
     # convlstm_predict(dd='./gfigs')
