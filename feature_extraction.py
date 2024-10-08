@@ -2,8 +2,9 @@ import pandas as pd
 import pickle
 import numpy as np
 import os
+os.environ["KERAS_BACKEND"] = "tensorflow"
 import fnmatch
-import zipfile as zip
+# import zipfile as zip
 import keras
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
@@ -20,7 +21,77 @@ import tensorflow as tf
 
 import pred
 
-def VAE(input_shape, intermediate_dim=512, latent_dim=2):
+
+class Sampling(layers.Layer):
+    """Uses (z_mean, z_log_var) to sample z, the vector encoding a digit."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.seed_generator = keras.random.SeedGenerator(1337)
+
+    def call(self, inputs):
+        z_mean, z_log_var = inputs
+        batch = ops.shape(z_mean)[0]
+        dim = ops.shape(z_mean)[1]
+        epsilon = keras.random.normal(shape=(batch, dim), seed=self.seed_generator)
+        return z_mean + ops.exp(0.5 * z_log_var) * epsilon
+
+def vae_loss(z_mean, z_log_var): 
+    def vae_reconstruction_loss(y_true, y_pred):
+        reconstruction_ration = 1000
+        reconstruction_loss = ops.mean(ops.square(y_true-y_pred), axis=1)
+        return reconstruction_loss*reconstruction_ration
+    def vae_kl_loss(z_mean, z_log_var):
+        kl_loss = -0.5 * ops.sum(1 + z_log_var - ops.square(z_mean) - ops.exp(z_log_var), axis=1)
+        return kl_loss
+    
+    def vae_kl_loss_metric(y_true, y_pred):
+        kl_loss = -0.5 * ops.sum(1 + z_log_var - ops.square(z_mean) - ops.exp(z_log_var), axis=1)
+        return kl_loss
+    
+    def vae_loss(y_true, y_pred):
+        reconstruction_loss = vae_reconstruction_loss(y_true, y_pred)
+        kl_loss = vae_kl_loss(y_true, y_pred)
+        return reconstruction_loss + kl_loss
+    
+    return vae_loss
+    
+
+class VAE(keras.Model):
+    def __init__(self, encoder, decoder, **kwargs):
+        super().__init__(**kwargs)
+        self.encoder = encoder
+        self.decoder = decoder
+        self.total_loss_tracker = keras.metrics.Mean(name="total_loss")
+        self.reconstruction_loss_tracker = keras.metrics.Mean(name="reconstruction_loss")
+        self.kl_loss_tracker = keras.metrics.Mean(name="kl_loss")
+    
+    @property
+    def metrics(self):
+        return [self.total_loss_tracker, self.reconstruction_loss_tracker, self.kl_loss_tracker]
+
+    def train_step(self, data):
+        with tf.GradientTape() as tape:
+            z_mean, z_log_var, z = self.encoder(data[0])
+            reconstruction = self.decoder(z)
+            # reconstruction_loss = keras.losses.binary_crossentropy(data[0], reconstruction)
+            reconstruction_loss = ops.mean(ops.square(data[1]-reconstruction), axis=1)
+            reconstruction_loss *= data[1].shape[1]
+            kl_loss = -0.5 * ops.sum(1 + z_log_var - ops.square(z_mean) - ops.exp(z_log_var), axis=1)
+            total_loss = reconstruction_loss + kl_loss
+        
+        grads = tape.gradient(total_loss, self.trainable_weights)
+        self.optimizer.apply_gradients(zip(grads, self.trainable_weights))
+        self.total_loss_tracker.update_state(total_loss)
+        self.reconstruction_loss_tracker.update_state(reconstruction_loss)
+        self.kl_loss_tracker.update_state(kl_loss)
+        return {
+            "loss": self.total_loss_tracker.result(),
+            "reconstruction_loss": self.reconstruction_loss_tracker.result(),
+            "kl_loss": self.kl_loss_tracker.result()
+        }
+
+def build_vae(input_shape, intermediate_dim=512, latent_dim=2):
     """
     Variational Autoencoder model
     """
@@ -30,37 +101,27 @@ def VAE(input_shape, intermediate_dim=512, latent_dim=2):
     z_mean = Dense(latent_dim, name='z_mean')(x)
     z_log_var = Dense(latent_dim, name='z_log_var')(x)
 
-    def sampling(args):
-        z_mean, z_log_var = args
-        batch = ops.shape(z_mean)[0]
-        dim = ops.int_shape(z_mean)[1]
-        epsilon = ops.random_normal(shape=(batch, dim))
-        return z_mean + ops.exp(0.5 * z_log_var) * epsilon
-
     # Sample from the latent space
-    z = layers.Lambda(sampling, output_shape=(latent_dim,), name='z')([z_mean, z_log_var])
+    z = Sampling()([z_mean, z_log_var]) 
 
     # Encoder
     encoder = Model(inputs, [z_mean, z_log_var, z], name='encoder')
+    encoder.summary()
 
     # Decoder
     latent_inputs = Input(shape=(latent_dim,), name='z_sampling')
     x = Dense(intermediate_dim, activation='relu')(latent_inputs)
-    outputs = Dense(input_shape[0], activation='sigmoid')(x)
+    outputs = Dense(input_shape[0], activation='relu')(x)
     decoder = Model(latent_inputs, outputs, name='decoder')
+    decoder.summary()
 
-    # Instantiate the model
-    outputs = decoder(encoder(inputs)[2])
-    vae = keras.Model(inputs, outputs, name='vae_mlp')
+    # VAE
+    decoder_output = decoder(encoder(inputs)[2])
+    vae = Model(inputs, decoder_output, name='vae')
+    vae.compile(optimizer='adam', loss=vae_loss(z_mean, z_log_var))
 
-    # Loss
-    xent_loss = input_shape[0] * ops.binary_crossentropy(inputs, outputs)
-    kl_loss = - 0.5 * ops.sum(1 + z_log_var - ops.square(z_mean) - ops.exp(z_log_var), axis=-1)
-    vae_loss = ops.mean(xent_loss + kl_loss)
-
-    vae.add_loss(vae_loss)
-    vae.compile(optimizer='adam')
     return vae
+
 
 class Autoencoder:
     def __init__(self, encoding_dim, input_shape):
@@ -125,6 +186,40 @@ def autoencoder_fit(tX, ty, encoding_dim, TSTEPS=32):
     model.fit(tX_transform, ty)
     return encoder, model
 
+def vae_fit(tX, tY, encoding_dim):
+    """
+    Uses a VAE to extract features from the data 
+    and then uses a regression model to predict the implied volatility
+
+    Features extracted will be in the shape of (samples, components*tX.shape[-1])
+    i.e. component number of skews for each sample
+
+    Output: encoder, ridge model 
+    """
+    # XXX latent_dim = encoding_dim * num points in skew
+    latent_dim = encoding_dim*tX.shape[-1]
+    # Intermediate dim is slightly larger than the latent dim
+    intermediate_dim = (encoding_dim+1)*tX.shape[-1]
+
+    tX = tX.reshape(tX.shape[0], tX.shape[1]*tX.shape[2])
+    vae = build_vae(input_shape=(tX.shape[1],), intermediate_dim=intermediate_dim,
+                                 latent_dim=latent_dim)
+    vae.summary()
+    # reduce learning rate
+    reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='loss', factor=0.2, patience=5, min_lr=0.0001)
+    # Early stopping
+    early_stopping = tf.keras.callbacks.EarlyStopping(monitor='loss', patience=10)
+    vae.fit(tX, tX, epochs=100, batch_size=5, shuffle=True, callbacks=[reduce_lr, early_stopping])
+
+    # XXX Transform the data
+    # Get the encoder model
+    encoder = Model(inputs=vae.get_layer('encoder').input, outputs=vae.get_layer('encoder').output) 
+
+    tX_transform = encoder.predict(tX)[2]
+    # Fit regression model
+    model = Ridge()
+    model.fit(tX_transform, tY)
+    return vae, model
 
 def pca_predict(valX, model, n_components, TSTEPS):
     valX_transform = pca_transform(valX, n_components, TSTEPS)
@@ -443,15 +538,15 @@ def run_all_models():
 
 
 if __name__ == "__main__":
-    for n in ['call', 'put']:
-        for i in ['./figs', './gfigs']:
-            for k in ['pca', 'autoencoder']:
-                for j in [5, 10, 20]:
-                    mskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
-                    tskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
-            # Do a run for the HAR method
-            # tskew_pred(model_name='har', TSTEPS=32, dd=i)
-            # mskew_pred(model_name='har', TSTEPS=32, dd=i)
+    # for n in ['call', 'put']:
+    #     for i in ['./figs', './gfigs']:
+    #         for k in ['pca', 'autoencoder']:
+    #             for j in [5, 10, 20]:
+    #                 mskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
+    #                 tskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
+    #         # Do a run for the HAR method
+    #         # tskew_pred(model_name='har', TSTEPS=32, dd=i)
+    #         # mskew_pred(model_name='har', TSTEPS=32, dd=i)
 
     # for i in ['./gfigs']:
     #     print('Running for: ', i)
@@ -463,3 +558,26 @@ if __name__ == "__main__":
     #     # Do a run for the HAR method
     #     print('Running for: ', 'har')
     #     point_pred(model_name='har', TSTEPS=32, dd=i)
+    # Load data
+
+    tX, tY, vX, vY, _ = load_data(otype='call', TSTEPS=5, dd='./figs')
+    tX = tX.reshape(tX.shape[:-1]) 
+    vX = vX.reshape(vX.shape[:-1])
+    mskew = tX[:, :, :, 1]
+    tYY = tY[:, :, 1]
+
+    vmskew= vX[:, :, :, 1]
+    vmskew = vmskew.reshape(vmskew.shape[0], vmskew.shape[1]*vmskew.shape[2])
+    vae, model = vae_fit(mskew, tYY, encoding_dim=2)
+    encoder = Model(inputs=vae.get_layer('encoder').input, outputs=vae.get_layer('encoder').output) 
+    vX_transform = encoder.predict(vmskew)[2]
+    ypred =  model.predict(vX_transform)
+    # Evaluate the model
+    rmse = root_mean_squared_error(vY[:, :, 1], ypred, multioutput='raw_values')
+    mapes = mean_absolute_percentage_error(vY[:, :, 1], ypred, multioutput='raw_values')
+    r2sc = r2_score(vY[:, :, 1], ypred, multioutput='raw_values')
+
+    print('RMSE mean: ', np.mean(rmse), 'RMSE std: ', np.std(rmse))
+    print('MAPE mean: ', np.mean(mapes), 'MAPE std: ', np.std(mapes))
+    print('R2 mean: ', np.mean(r2sc), 'R2 std: ', np.std(r2sc))
+
