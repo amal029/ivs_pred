@@ -108,17 +108,20 @@ class Autoencoder:
         else: 
             self.model = self.autoencoder_build()
 
-    def fit(self, tX, epochs=500, batch_size=32, shuffle=False, validation_split=0.2):
+    def fit(self, tX, epochs=100, batch_size=128, shuffle=True, validation_split=0.2):
         # reduce learning rate
         reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='loss', factor=0.2, patience=5, min_lr=0.0001)
         # Early stopping
         early_stopping = tf.keras.callbacks.EarlyStopping(monitor='loss', patience=10)
         # tX = tX.reshape(tX.shape[0], tX.shape[1]*tX.shape[2])
         self.model.fit(tX, tX, epochs=epochs, batch_size=batch_size, 
-                       shuffle=shuffle, validation_split=validation_split, callbacks=[reduce_lr, early_stopping])
+                       shuffle=shuffle, validation_split=validation_split, callbacks=[reduce_lr, early_stopping], verbose=0)
     
     def save(self, path):
-        self.model.save(path)
+        if self.vae:
+            self.model.encoder.save(path)
+        else:
+            self.model.save(path)
 
 
     def autoencoder_build(self) :
@@ -149,14 +152,14 @@ class Autoencoder:
 
         # Encoder
         encoder = Model(inputs,  [z_mean, z_log_var, z], name='encoder')
-        encoder.summary()
+        # encoder.summary()
 
         # Decoder
         latent_inputs = Input(shape=(latent_dim,), name='z_sampling')
         x = Dense(input_shape, activation='relu')(latent_inputs)
-        outputs = Dense(input_shape, activation='relu')(x)
+        outputs = Dense(input_shape, activation='sigmoid')(x)
         decoder = Model(latent_inputs, outputs, name='decoder')
-        decoder.summary()
+        # decoder.summary()
 
         # VAE
         vae = VAE(encoder, decoder)
@@ -207,7 +210,10 @@ def autoencoder_fit(tX, ty, encoding_dim, TSTEPS=21, type='skew', vae=False):
 
     encoder = Autoencoder(encoding_dim, tX.shape[1], vae=vae, intermediate_dim=intermediate_dim)
     encoder.fit(tX)
-    tX_transform = encoder.predict(tX)[2]
+    if vae:
+        tX_transform = encoder.predict(tX)[2]
+    else:
+        tX_transform = encoder.predict(tX)
     # Add the structure back So we end up with our encoded features + structure at the end of each sample
     tX_transform = np.concatenate([tX_transform, structure], axis=1)
     # Fit regression model
@@ -358,10 +364,10 @@ def tskew_pred(otype, model_name='pca', TSTEPS=10, dd='./figs'):
         ms = np.array([m]*tskew.shape[0]).reshape(tskew.shape[0], 1)
         tskew = np.append(tskew, ms, axis=1)
 
-        # vtskew= vX[:, :, j]
-        # vtskew = vtskew.reshape(vtskew.shape[0], vtskew.shape[1]*vtskew.shape[2])
-        # vms = np.array([m]*vtskew.shape[0]).reshape(vtskew.shape[0], 1)
-        # vtskew = np.append(vtskew, vms, axis=1)
+        vtskew= vX[:, :, j]
+        vtskew = vtskew.reshape(vtskew.shape[0], vtskew.shape[1]*vtskew.shape[2])
+        vms = np.array([m]*vtskew.shape[0]).reshape(vtskew.shape[0], 1)
+        vtskew = np.append(vtskew, vms, axis=1)
 
         
         # Fit the model
@@ -599,12 +605,12 @@ def run_all_models():
 if __name__ == "__main__":
     for n in ['call', 'put']:
         for i in ['./figs', './gfigs']:
-            for k in ['vae', 'autoencoder', 'pca']:
-                for j in [5, 10, 20]:
-                    print('Running for: ', n, i, k, j)
-                    tskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
-                    point_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
-                    mskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
+            # for k in ['autoencoder', 'pca']:
+            #     for j in [5, 10, 20]:
+            #         print('Running for: ', n, i, k, j)
+            #         tskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
+            #         point_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
+            #         mskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
             # Do a run for the HAR method
             print('Running for: ', n, i, 'har')
             tskew_pred(otype=n, model_name='har', TSTEPS=21, dd=i)

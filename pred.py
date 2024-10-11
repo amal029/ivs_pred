@@ -796,7 +796,7 @@ def tskew_pred(otype, dd='./figs', model='tskridge', TSTEPS=5):
         # XXX: shape = samples, TSTEPS, moneyness, term structure
         tskew = tX[:, :, j]
         tskew = tskew.reshape(tskew.shape[0], tskew.shape[1]*tskew.shape[2])
-        # XXX: Add m to the sample set
+        # # XXX: Add m to the sample set
         ms = np.array([m]*tskew.shape[0]).reshape(tskew.shape[0], 1)
         tskew = np.append(tskew, ms, axis=1)
         tYY = tY[:, j]
