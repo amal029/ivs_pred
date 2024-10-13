@@ -20,12 +20,14 @@ from keras.models import Model
 from sklearn.metrics import root_mean_squared_error
 from sklearn.metrics import mean_absolute_percentage_error
 from sklearn.metrics import r2_score
+from sklearn.utils.validation import check_array, FLOAT_DTYPES
+from sklearn.utils.validation import check_is_fitted
 import keras
 # from PIL import Image
 # XXX: For plotting only
 import matplotlib.pyplot as plt
 # from sklearn.linear_model import SGDRegressor
-from sklearn.cross_decomposition import PLSRegression
+from sklearn.cross_decomposition import PLSSVD
 from scipy.stats import norm
 
 # XXX: Moneyness Bounds inclusive
@@ -39,6 +41,86 @@ UT = 366
 TSTEP = 5                       # days
 
 DAYS = 365
+
+
+# XXX: The class to perform pls based regression
+class MPls:
+    def __init__(self, n_components, intercept, t='plsridge'):
+        self.__n_components = n_components
+        self._reg_svd = PLSSVD(n_components=n_components)
+        self.xmean = 0
+        self.ymean = 0
+        self.xstd = 0
+        self.ystd = 0
+        if (t == 'plsridge' or t == 'pmplsridge' or t == 'mskplsridge' or (
+                t == 'tskplsridge')):
+            # print('Doing %s' % t)
+            self._reg = Ridge(fit_intercept=intercept)
+        elif t == 'plslasso' or t == 'pmplslasso' or t == 'mskplslasso' or (
+                t == 'tskplslasso'):
+            # print('Doing %s' % t)
+            self._reg = Lasso(fit_intercept=intercept)
+        elif t == 'plsenet' or t == 'pmplsenet' or t == 'mskplsenet' or (
+                t == 'tskplsenet'):
+            # print('Doing %s' % t)
+            self._reg = ElasticNet(fit_intercept=intercept)
+
+    def _center_scale_xy(self, X, Y, scale=True):
+        # print(X.shape, Y.shape)
+        # center
+        x_mean = X.mean(axis=0)
+        X -= x_mean
+        y_mean = Y.mean(axis=0)
+        Y -= y_mean
+        # scale
+        if scale:
+            x_std = X.std(axis=0, ddof=1)
+            x_std[x_std == 0.0] = 1.0
+            X /= x_std
+            y_std = Y.std(axis=0, ddof=1)
+            if type(y_std) is not np.float64:
+                y_std[y_std == 0.0] = 1.0
+            else:
+                y_std = 1.0 if y_std == 0.0 else y_std
+            Y /= y_std
+        else:
+            x_std = np.ones(X.shape[1])
+            y_std = np.ones(Y.shape[1])
+        return x_mean, y_mean, x_std, y_std
+
+    def fit(self, tX, tY):
+        (self.xmean, self.ymean,
+         self.xstd, self.ystd) = self._center_scale_xy(np.copy(tX),
+                                                       np.copy(tY))
+        tXX, tYY = self._reg_svd.fit_transform(tX, tY)
+        # print(tXX.shape, tYY.shape)
+        self._reg = self._reg.fit(tXX, tYY)
+        # print('Ridge r2: ', self._reg.score(tXX, tYY))
+        # tXX = check_array(tXX, input_name='X', dtype=FLOAT_DTYPES)
+        # tXX1 = tXX @ self._reg_svd.x_weights_.T * self.xstd + self.xmean
+        # tYY = check_array(tYY, input_name='y', dtype=FLOAT_DTYPES)
+        # tYY1 = tYY @ self._reg_svd.y_weights_.T * self.ystd + self.ymean
+        # print('X SVD r2: ', r2_score(tX, tXX1))
+        # print('Y SVD r2: ', r2_score(tY, tYY1))
+        return self
+
+    def predict(self, tX):
+        tXX = self._reg_svd.transform(tX)
+        check_is_fitted(self._reg_svd)
+        check_is_fitted(self._reg)
+        # print(tXX.shape)
+        vYY = self._reg.predict(tXX)
+        # print(vYY.shape)
+        # vY = vYY @ self._reg_svd.y_weights_.T * self.ystd + self.ymean
+        vYY = vYY.reshape(vYY.shape[0], self._reg_svd.y_weights_.T.shape[0])
+        vY = np.dot(vYY, self._reg_svd.y_weights_.T) * self.ystd + self.ymean
+        return vY
+
+    def score(self, tX, tY):
+        tXX = self._reg_svd.transform(tX)
+        vYY = self._reg.predict(tXX)
+        vY = vYY @ self._reg_svd.y_weights_.T * self.ystd + self.ymean
+        return r2_score(tY, vY)
 
 
 def getr(row, mk):
@@ -295,7 +377,6 @@ def main(mdir, years, months, instrument, dfs: dict):
         z = zip.ZipFile(mdir+f)
         ofs = [i for i in z.namelist() if 'options_' in i]
         # print(ofs)
-        # assert (1 == 2)
         # XXX: Now read just the option data files
         for f in ofs:
             key = f.split(".csv")[0].split("_")[2]
@@ -714,10 +795,15 @@ def regression_predict(otype, dd='./figs', model='Ridge', TSTEPS=10):
                              n_estimators=100,
                              verbosity=2))
 
-    if model == 'pls':
-        tokeep = cca_comps(tX, tY, N_COMP=10)
-        treg = 'pls'
-        reg = PLSRegression(n_components=tokeep)
+    if model == 'plsridge' or model == 'plslasso' or model == 'plsenet':
+        if dd != './gfigs':
+            tokeep = cca_comps(tX, tY)
+        else:
+            tokeep = cca_comps(tX, tY, N_COMP=20)
+        # XXX: Get the score and predict using scores then get it back
+        treg = model
+        reg = MPls(tokeep, intercept, model)
+
     reg.fit(tX, tY)
     print('Train set R2: ', reg.score(tX, tY))
 
@@ -833,12 +919,18 @@ def mskew_pred(otype, dd='./figs', model='mskridge', TSTEPS=5):
             reg = Ridge(fit_intercept=True, alpha=1)
         elif model == 'msklasso':
             reg = Lasso(fit_intercept=True, alpha=1)
-        elif model == 'mskpls':
+        elif (model == 'mskplslasso' or model == 'mskplsridge' or
+              model == 'mskplsenet'):
             tokeep = cca_comps(mskew, tYY)
-            reg = PLSRegression(n_components=tokeep)
+            # reg = PLSRegression(n_components=tokeep)
+            reg = MPls(tokeep, True, model)
         else:
             reg = ElasticNet(fit_intercept=True, alpha=1)
         reg.fit(mskew, tYY)
+        print(mskew.shape)
+        u = reg.predict(mskew)
+        print(u.shape)
+        assert (False)
         # print(reg.score(mskew, tYY))
         import pickle
         if dd != './gfigs':
@@ -884,9 +976,11 @@ def tskew_pred(otype, dd='./figs', model='tskridge', TSTEPS=5):
             reg = Ridge(fit_intercept=True, alpha=1)
         elif model == 'tsklasso':
             reg = Lasso(fit_intercept=True, alpha=1)
-        elif model == 'tskpls':
+        elif (model == 'tskplsridge' or model == 'tskplslasso' or
+              model == 'tskplsenet'):
             tokeep = cca_comps(tskew, tYY)
-            reg = PLSRegression(tokeep)
+            reg = MPls(tokeep, True, model)
+            # reg = PLSRegression(tokeep)
         else:
             reg = ElasticNet(fit_intercept=True, alpha=1)
         reg.fit(tskew, tYY)
@@ -908,7 +1002,7 @@ def cca_comps(X, y, N_COMP=None):
         N_COMP_UB = min(X.shape[0], X.shape[1], N_TARGETS)
         N_COMP = max(1, N_COMP_UB)
 
-    reg = PLSRegression(n_components=N_COMP)
+    reg = PLSSVD(n_components=N_COMP)
     reg.fit(X, y)
     ypir, yir = reg.transform(X, y)
     tokeep = 0
@@ -962,14 +1056,17 @@ def point_pred(otype, dd='./figs', model='pmridge', TSTEPS=10):
                 reg = Ridge(fit_intercept=True, alpha=1)
             elif model == 'pmlasso':
                 reg = Lasso(fit_intercept=True, alpha=1)
-            elif model == 'pmpls':
+            elif (model == 'pmplsridge' or model == 'pmplslasso' or
+                  model == 'pmplsenet'):
                 tokeep = cca_comps(train_vec, tY[:, i, j])
-                reg = PLSRegression(n_components=tokeep)
+                reg = MPls(tokeep, True)
+                # reg = PLSRegression(n_components=tokeep)
             else:
                 reg = ElasticNet(fit_intercept=True, alpha=1,
                                  selection='random')
             reg.fit(train_vec, tY[:, i, j])
             # print('Train set R2: ', reg.score(train_vec, tY[:, i, j]))
+            # assert (False)
 
             # XXX: Predict (Validation)
             # print(vX.shape, vY.shape)
@@ -995,18 +1092,10 @@ def point_pred(otype, dd='./figs', model='pmridge', TSTEPS=10):
 def linear_fit(otype):
     # Surface regression prediction (RUN THIS WITH OMP_NUM_THREADS=10 on
     # command line)
-    # XXX: Point regression
-    for j in ['./figs', './gfigs']:
-        for k in ['pmpls',
-                  # 'pmridge', 'pmlasso', 'pmenet'
-                  ]:
-            for i in [5, 10, 20]:
-                print('Doing: %s_%s_%s' % (k, j, i))
-                point_pred(otype, dd=j, model=k, TSTEPS=i)
 
     # XXX: Moneyness skew regression
     for j in ['./figs', './gfigs']:
-        for k in ['mskpls',
+        for k in ['mskplslasso', 'mskplsridge', 'mskplsenet'
                   # 'mskridge', 'msklasso', 'mskenet'
                   ]:
             for i in [5, 10, 20]:
@@ -1015,15 +1104,24 @@ def linear_fit(otype):
 
     # XXX: Term structure skew regression
     for j in ['./figs', './gfigs']:
-        for k in ['tskpls',
+        for k in ['tskplsridge', 'tskplslasso', 'tskplsenet'
                   # 'tskridge', 'tsklasso', 'tskenet'
                   ]:
             for i in [5, 10, 20]:
                 print('Doing: %s_%s_%s' % (k, j, i))
                 tskew_pred(otype, dd=j, model=k, TSTEPS=i)
 
+    # XXX: Point regression
+    for j in ['./figs', './gfigs']:
+        for k in ['pmplsridge', 'pmplslasso', 'pmplsenet'
+                  # 'pmridge', 'pmlasso', 'pmenet'
+                  ]:
+            for i in [5, 10, 20]:
+                print('Doing: %s_%s_%s' % (k, j, i))
+                point_pred(otype, dd=j, model=k, TSTEPS=i)
+
     # XXX: Surface regression
-    for k in ['pls',
+    for k in ['plsenet', 'plsridge', 'plslasso'
               # 'Ridge', 'Lasso', 'ElasticNet'
               ]:
         for j in ['./figs', './gfigs']:
@@ -1043,11 +1141,11 @@ if __name__ == '__main__':
     # excel_to_images(otype='put', dvf=False)
 
     # XXX: Fit the linear models
-    # for otype in ['call', 'put']:
-    #     linear_fit(otype)
+    for otype in ['call', 'put']:
+        linear_fit(otype)
 
     # XXX: Get interest rates and forward prices
-    excel_to_images(ironly=True)
+    # excel_to_images(ironly=True)
 
     # XXX: ConvLSTM2D prediction
     # convlstm_predict(dd='./gfigs')

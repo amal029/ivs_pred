@@ -12,6 +12,8 @@ import dmtest
 # import gzip
 import pandas as pd
 import blosc2
+from pred import MPls
+from scipy import stats
 
 
 def date_to_num(otype, date, dd='./figs'):
@@ -195,7 +197,8 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
 
     elif (model == 'pmridge' or model == 'pmlasso' or model == 'pmenet' or
-          model == 'pmpls'):
+          model == 'pmplsridge' or model == 'pmplslasso' or (
+              model == 'pmplsenet')):
         # XXX: The output vector
         out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
         out = out.reshape(*valY.shape)
@@ -217,7 +220,12 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                 # XXX: Now make the prediction
                 k = np.array([s, t]*valX.shape[0]).reshape(valX.shape[0], 2)
                 val_vec = np.append(valX[:, :, i, j], k, axis=1)
-                out[:, i, j] = m1.predict(val_vec)
+                if model == 'pmplsridge' or model == 'pmplslasso' or (
+                        model == 'pmplsenet'):
+                    vvo = m1.predict(val_vec)
+                    out[:, i, j] = vvo.reshape(vvo.shape[0])
+                else:
+                    out[:, i, j] = m1.predict(val_vec)
 
                 # XXX: Feature vector plot
                 if get_features and model == 'pmridge':
@@ -239,7 +247,8 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
 
     elif (model == 'tskenet' or model == 'tskridge' or model == 'tsklasso' or
-          model == 'tskpls'):
+          model == 'tskplsridge' or model == 'tskplslasso' or
+          model == 'tskplsenet'):
         # XXX: The output vector
         out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
         out = out.reshape(*valY.shape)
@@ -298,7 +307,8 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
 
     elif (model == 'mskenet' or model == 'mskridge' or model == 'msklasso' or
-          model == 'mskpls'):
+          model == 'mskplsridge' or model == 'mskplslasso' or
+          model == 'mskplsenet'):
         # XXX: The output vector
         out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
         out = out.reshape(*valY.shape)
@@ -322,6 +332,9 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             # XXX: Add t to the sample set
             ts = np.array([t]*mskew.shape[0]).reshape(mskew.shape[0], 1)
             mskew = np.append(mskew, ts, axis=1)
+            # print('./mskew_models/%s_ts_%s_%s_%s.pkl' % (model, TSTEPS,
+            #                                              t, otype))
+            # print(mskew.shape)
             out[:, :, j] = m1.predict(mskew)
 
             if get_features and model == 'mskridge':
@@ -494,7 +507,7 @@ def rmse_r2_time_series(fname, ax1, ax2, mm, m1, em, bottom):
         # corr = np.corrcoef(ypir[:, 0], yir[:, 0])[0, 1]
         # print('corr:', corr**2)
         # r2sc[i] = corr
-        r2sc[i] = r2_score(np.transpose(yi), np.transpose(ypi))
+        r2sc[i] = r2_score(yi, ypi)
     # XXX: Clean it up to have a min value of 0
     r2sc = [0 if i < 0 else i for i in r2sc]
 
@@ -526,22 +539,22 @@ def overall(fname):
     MS = len(mms)
     TS = len(tts)
 
-    otype = fname.split('/')[2].split('_')[0]
-    figss = fname.split('/')[2].split('_')[1]
-    mname = fname.split('/')[2].split('_')[5].split('.')[0]
-    mlags = fname.split('/')[2].split('_')[3]
+    # otype = fname.split('/')[2].split('_')[0]
+    # figss = fname.split('/')[2].split('_')[1]
+    # mname = fname.split('/')[2].split('_')[5].split('.')[0]
+    # mlags = fname.split('/')[2].split('_')[3]
 
-    print('Doing model: %s %s %s, Lags: %s' % (otype, figss, mname, mlags))
+    # print('Doing model: %s %s %s, Lags: %s' % (otype, figss, mname, mlags))
 
     data = blosc2.load_array(fname)
     # with gzip.open(filename=fname, mode='rb') as f:
     #     data = np.load(f)
 
     # XXX: Attach the date time for each y and yp
-    date = pd.to_datetime(data[:, 0], format='%Y%m%d')
+    # date = pd.to_datetime(data[:, 0], format='%Y%m%d')
     y = data[:, 1:MS*TS+1].astype(float, copy=False)
     yp = data[:, MS*TS+1:].astype(float, copy=False)
-    print(date.shape, y.shape, yp.shape)
+    # print(date.shape, y.shape, yp.shape)
 
     # XXX: Get the rolling RMSE
     rmses = root_mean_squared_error(np.transpose(y), np.transpose(yp),
@@ -553,12 +566,15 @@ def overall(fname):
 
 
 def model_v_model(otype):
-    TTS = [20, 10, 5]
-    models = ['ridge', 'lasso',  # 'rf',
-              'enet', 'pls',  # 'keras',
-              'pmridge', 'pmlasso', 'pmenet', 'pmpls', 'mskridge',
-              'msklasso', 'mskenet', 'mskpls', 'tskridge',
-              'tsklasso', 'tskenet', 'tskpls']
+    TTS = [5, 20, 10]
+    models = ['mskplslasso', 'mskplsridge', 'mskplsenet',
+              'msklasso', 'mskenet', 'ridge', 'lasso',  # 'rf',
+              'enet', 'plsridge', 'plslasso', 'plsenet',  # 'keras',
+              'pmridge', 'pmlasso', 'pmenet', 'pmplsridge',
+              'pmplslasso', 'pmplsenet',
+              'mskridge', 'tskridge',
+              'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
+              'tskplsenet']
     fp = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
                                                              len(models))
           for t in TTS}
@@ -577,7 +593,7 @@ def model_v_model(otype):
                     if cache[dd][t][models[i]] is None:
                         dates, y, yp = main(otype, plot=False, TSTEPS=t,
                                             model=models[i],
-                                            get_features=True,
+                                            get_features=False,
                                             dd=dd)
                         cache[dd][t][models[i]] = (dates, y, yp)
                     else:
@@ -585,7 +601,7 @@ def model_v_model(otype):
                     if cache[dd][t][models[j]] is None:
                         dates, yk, ypk = main(otype, plot=False, TSTEPS=t,
                                               model=models[j],
-                                              get_features=True,
+                                              get_features=False,
                                               dd=dd)
                         cache[dd][t][models[j]] = (dates, yk, ypk)
                     else:
@@ -613,10 +629,13 @@ def model_v_model(otype):
 
 def call_dmtest(otype):
     TTS = [20, 10, 5]
-    models = ['ridge', 'lasso', 'enet', 'pls',
-              'pmridge', 'pmlasso', 'pmenet', 'pmpls', 'mskridge',
-              'msklasso', 'mskenet', 'mskpls', 'tskridge', 'tsklasso',
-              'tskenet', 'tskpls']
+    models = ['ridge', 'lasso', 'enet', 'plsridge', 'plslasso', 'plsenet',
+              'pmridge', 'pmlasso', 'pmenet', 'pmplsridge', 'pmplslasso',
+              'pmplsenet', 'mskridge',
+              'msklasso', 'mskenet', 'mskplsridge', 'mskplslasso',
+              'mskplsenet',
+              'tskridge', 'tsklasso',
+              'tskenet', 'tskplsridge', 'tskplslasso', 'tskplsenet']
     fp = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
                                                              len(models))
           for t in TTS}
@@ -671,7 +690,8 @@ def call_timeseries(otype):
     m1 = ['*', 'P', 'd', '8']
     for dd in ['figs', 'gfigs']:
         for ts in [5, 10, 20]:
-            fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1)
+            fig1, ax1 = plt.subplots(nrows=1, ncols=1)
+            fig2, ax2 = plt.subplots(nrows=1, ncols=1)
             bottom = [0]*9
             for i, model in enumerate(models):
                 # XXX: Do only the best ones
@@ -694,21 +714,33 @@ def call_timeseries(otype):
             ax2.legend(ncol=4, loc='upper center', bbox_to_anchor=(0.5, 1.05),
                        fancybox=True, shadow=True)
             plt.xticks(fontsize=9, rotation=40)
-            plt.savefig('./plots/%s_%s_rmse_r2_time_series_best_models_%s.pdf'
-                        % (otype, dd, ts))
-            plt.close(fig)
+            fig1.savefig('./plots/%s_%s_rmse_time_series_best_models_%s.pdf'
+                         % (otype, dd, ts))
+            fig2.savefig('./plots/%s_%s_r2_time_series_best_models_%s.pdf'
+                         % (otype, dd, ts))
+            plt.close(fig1)
+            plt.close(fig2)
 
 
 def call_overall(otype):
     # XXX: Now plot the overall RMSE, MAPE, and R2 for all models
     # average across all results.
     TTS = [20, 10, 5]
-    lmodels = ['sridge', 'slasso', 'senet', 'spls', 'pmridge', 'pmlasso',
-               'pmenet', 'pmpls', 'mskridge', 'msklasso', 'mskenet', 'mskpls',
-               'tskridge', 'tsklasso', 'tskenet', 'tskpls']
-    models = ['ridge', 'lasso', 'enet', 'pls', 'pmridge', 'pmlasso',
-              'pmenet', 'pmpls', 'mskridge', 'msklasso', 'mskenet', 'mskpls',
-              'tskridge', 'tsklasso', 'tskenet', 'tskpls']
+    lmodels = ['sridge', 'slasso', 'senet',
+               'splsridge', 'splslasso', 'splsenet',
+               'pmridge', 'pmlasso',
+               'pmenet', 'pmplsridge', 'pmplslasso', 'pmplsenet',
+               'mskridge', 'msklasso', 'mskenet', 'mskplsridge', 'mskplslasso',
+               'mskplsenet',
+               'tskridge', 'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
+               'tskplsenet']
+    models = ['ridge', 'lasso', 'enet', 'plsridge', 'plslasso', 'plsenet',
+              'pmridge', 'pmlasso',
+              'pmenet', 'pmplsridge', 'pmplslasso', 'pmplsenet',
+              'mskridge', 'msklasso', 'mskenet', 'mskplsridge', 'mskplslasso',
+              'mskplsenet',
+              'tskridge', 'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
+              'tskplsenet']
 
     # XXX: Do the overall RMSE, MAPE, and R2
     for dd in ['figs', 'gfigs']:
@@ -722,6 +754,7 @@ def call_overall(otype):
             for i, model in enumerate(models):
                 name = './final_results/%s_%s_ts_%s_model_%s.npy.gz' % (
                     otype, dd, ts, model)
+                print('Doing model: %s' % name)
                 rmsem, rmsestd, r2m, r2std = overall(name)
                 # XXX: MEAN
                 rmsemeans.append(rmsem)
@@ -731,39 +764,44 @@ def call_overall(otype):
                 rmsestds.append(rmsestd)
                 # mapestds.append(mapestd)
                 r2stds.append(r2std)
+            df = pd.DataFrame({'models': lmodels, 'rmse': rmsemeans,
+                               'rmsestd': rmsestds, 'r2:': r2means,
+                               'r2std': r2stds})
+            df.to_csv('./plots/%s_%s_rmse_r2_avg_std_models_%s.csv'
+                      % (otype, dd, ts))
 
             # XXX: plot means
-            fig, axs = plt.subplots(nrows=2, ncols=1, sharex=True)
-            bar0 = axs[0].bar(lmodels, rmsemeans, width=0.2)
-            axs[0].bar_label(bar0, fmt='%3.3f')
-            # bar1 = axs[1].bar(lmodels, mapemeans, width=0.2, color='r')
-            # if dd != 'gfigs':
-            #     axs[1].bar_label(bar1, fmt='%3.3f')
-            bar2 = axs[1].bar(lmodels, r2means, width=0.2, color='g')
-            axs[1].bar_label(bar2, fmt='%3.3f')
-            axs[0].set_ylabel('RMSE (avg)')
-            # axs[1].set_ylabel('MAPE (avg)')
-            axs[1].set_ylabel(r'$R^2$ (avg)')
-            plt.xticks(fontsize=9, rotation=45)
-            plt.savefig('./plots/%s_%s_rmse_r2_avg_models_%s.pdf'
-                        % (otype, dd, ts))
-            plt.close(fig)
+            # fig, axs = plt.subplots(nrows=2, ncols=1, sharex=True)
+            # bar0 = axs[0].bar(lmodels, rmsemeans, width=0.2)
+            # axs[0].bar_label(bar0, fmt='%3.3f')
+            # # bar1 = axs[1].bar(lmodels, mapemeans, width=0.2, color='r')
+            # # if dd != 'gfigs':
+            # #     axs[1].bar_label(bar1, fmt='%3.3f')
+            # bar2 = axs[1].bar(lmodels, r2means, width=0.2, color='g')
+            # axs[1].bar_label(bar2, fmt='%3.3f')
+            # axs[0].set_ylabel('RMSE (avg)')
+            # # axs[1].set_ylabel('MAPE (avg)')
+            # axs[1].set_ylabel(r'$R^2$ (avg)')
+            # plt.xticks(fontsize=9, rotation=45)
+            # plt.savefig('./plots/%s_%s_rmse_r2_avg_models_%s.pdf'
+            #             % (otype, dd, ts))
+            # plt.close(fig)
 
             # XXX: Plot the std deviation
-            fig, axs = plt.subplots(nrows=2, ncols=1, sharex=True)
-            bar0 = axs[0].bar(lmodels, rmsestds, width=0.2)
-            axs[0].bar_label(bar0, fmt='%3.3f')
-            # bar1 = axs[1].bar(lmodels, mapestds, width=0.2, color='r')
-            # axs[1].bar_label(bar1, fmt='%3.3f')
-            bar2 = axs[1].bar(lmodels, r2stds, width=0.2, color='g')
-            axs[1].bar_label(bar2, fmt='%3.3f')
-            axs[0].set_ylabel('RMSE (std-dev)')
-            # axs[1].set_ylabel('MAPE (std-dev)')
-            axs[1].set_ylabel(r'$R^2$ (std-dev)')
-            plt.xticks(fontsize=9, rotation=45)
-            plt.savefig('./plots/%s_%s_rmse_r2_std_models_%s.pdf'
-                        % (otype, dd, ts))
-            plt.close(fig)
+            # fig, axs = plt.subplots(nrows=2, ncols=1, sharex=True)
+            # bar0 = axs[0].bar(lmodels, rmsestds, width=0.2)
+            # axs[0].bar_label(bar0, fmt='%3.3f')
+            # # bar1 = axs[1].bar(lmodels, mapestds, width=0.2, color='r')
+            # # axs[1].bar_label(bar1, fmt='%3.3f')
+            # bar2 = axs[1].bar(lmodels, r2stds, width=0.2, color='g')
+            # axs[1].bar_label(bar2, fmt='%3.3f')
+            # axs[0].set_ylabel('RMSE (std-dev)')
+            # # axs[1].set_ylabel('MAPE (std-dev)')
+            # axs[1].set_ylabel(r'$R^2$ (std-dev)')
+            # plt.xticks(fontsize=9, rotation=45)
+            # plt.savefig('./plots/%s_%s_rmse_r2_std_models_%s.pdf'
+            #             % (otype, dd, ts))
+            # plt.close(fig)
 
 
 def moneyness_term(fname, m, mi, t, tn, df, df2, y=None, yp=None):
@@ -896,6 +934,79 @@ def r2_rmse_score_mt(otype, models=['tskridge', 'pmridge']):
                 model1, model2, otype, ts, dd))
 
 
+def pttest(y, yhat):
+    """Given NumPy arrays with predictions and with true values, return
+    Directional Accuracy Score, Pesaran-Timmermann statistic and its
+    p-value
+
+    """
+    size = y.shape[0]
+    pyz = np.sum(np.sign(y) == np.sign(yhat))/size
+    py = np.sum(y > 0)/size
+    qy = py*(1 - py)/size
+    pz = np.sum(yhat > 0)/size
+    qz = pz*(1 - pz)/size
+    p = py*pz + (1 - py)*(1 - pz)
+    v = p*(1 - p)/size
+    w = ((2*py - 1)**2) * qz + ((2*pz - 1)**2) * qy + 4*qy*qz
+    pt = (pyz - p) / (np.sqrt(v - w))
+    pval = 1 - stats.norm.cdf(pt, 0, 1)
+    return pyz, pt, pval
+
+
+def direction(otype, models=['tskridge', 'pmridge']):
+    mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+    # XXX: Now go through the TS
+    tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
+                                      pred.TSTEP)]
+    MS = len(mms)
+    TS = len(tts)
+    for dd in ['figs', 'gfigs']:
+        for ts in [20, 10, 5]:
+            for i, model in enumerate(models):
+                name = './final_results/%s_%s_ts_%s_model_%s.npy.gz' % (
+                    otype, dd, ts, model)
+                print('Doing model: %s' % name)
+                data = blosc2.load_array(name)
+                y = data[:, 1:MS*TS+1].astype(float, copy=False)
+                yp = data[:, MS*TS+1:].astype(float, copy=False)
+                d = np.diff(y, axis=0)
+                dhat = (yp[1:] - y[:-1])
+                print(d.shape, dhat.shape)
+                res = [pttest(d[:, i], dhat[:, i])
+                       for i in range(d.shape[1])]
+                pyz = [i[0] for i in res]
+                res = [i[2] for i in res]
+                pyz = np.array(pyz).reshape(MS, TS)
+                res = np.array(res).reshape(MS, TS)
+
+                fig, (axp, ax) = plt.subplots(nrows=2, ncols=1, sharex=True)
+
+                imp = axp.imshow(pyz, cmap='Greys')
+                im = ax.imshow(res, cmap='binary')
+
+                axp.set_ylabel('Moneyness', fontsize=16)
+                axp.set_yticks([0, MS-1], labels=['%0.2f' % mms[0],
+                                                  '%0.2f' % mms[-1]],
+                               fontsize=16)
+                fig.colorbar(imp, orientation='vertical', ax=axp)
+
+                ax.set_xlabel('Term structure', fontsize=16)
+                # ax.set_ylabel('Moneyness', fontsize=16)
+                ax.set_yticks([])
+                # ax.set_yticks([0, MS-2], labels=['%0.2f' % mms[0],
+                #                                  '%0.2f' % mms[-2]],
+                #               fontsize=16)
+                ax.set_xticks([0, TS-1], labels=['%0.2f' % tts[0],
+                                                 '%0.2f' % tts[-1]],
+                              fontsize=16)
+                fig.colorbar(im, orientation='vertical', ax=ax)
+
+                plt.savefig('./plots/dir_score_pval_%s_%s_ts_%s_model_%s.pdf' %
+                            (otype, dd, ts, model), bbox_inches='tight')
+                plt.close(fig)
+
+
 if __name__ == '__main__':
     plt.style.use('seaborn-v0_8-whitegrid')
 
@@ -910,9 +1021,12 @@ if __name__ == '__main__':
     #     call_timeseries(otype)
 
     # for otype in ['call', 'put']:
-    #     # XXX: DM test across time (RMSE and R2)
+    #     # XXX: DM test across time (RMSE)
     #     call_dmtest(otype)
 
     # XXX: r2_score for moneyness and term structure
+    # for otype in ['call', 'put']:
+    #     r2_rmse_score_mt(otype)
+
     for otype in ['call', 'put']:
-        r2_rmse_score_mt(otype)
+        direction(otype)
