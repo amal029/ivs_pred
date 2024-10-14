@@ -21,7 +21,7 @@ import tensorflow as tf
 
 import pred
 
-
+@keras.saving.register_keras_serializable()
 class Sampling(layers.Layer):
     """Uses (z_mean, z_log_var) to sample z, the vector encoding a digit."""
 
@@ -36,6 +36,7 @@ class Sampling(layers.Layer):
         epsilon = keras.random.normal(shape=(batch, dim))
         return z_mean + ops.exp(0.5 * z_log_var) * epsilon
 
+@keras.saving.register_keras_serializable()
 class VAE(keras.Model):
     def __init__(self, encoder, decoder, **kwargs):
         super().__init__(**kwargs)
@@ -108,7 +109,7 @@ class Autoencoder:
         else: 
             self.model = self.autoencoder_build()
 
-    def fit(self, tX, epochs=100, batch_size=128, shuffle=True, validation_split=0.2):
+    def fit(self, tX, epochs=100, batch_size=20, shuffle=True, validation_split=0.2):
         # reduce learning rate
         reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='loss', factor=0.2, patience=5, min_lr=0.0001)
         # Early stopping
@@ -148,7 +149,7 @@ class Autoencoder:
         z_log_var = Dense(latent_dim, activation='relu', name='z_log_var')(x)
 
         # Sample from the latent space
-        z = Sampling()([z_mean, z_log_var]) 
+        z = Sampling(name='sampling')([z_mean, z_log_var]) 
 
         # Encoder
         encoder = Model(inputs,  [z_mean, z_log_var, z], name='encoder')
@@ -181,6 +182,27 @@ class Autoencoder:
             encoder = Model(inputs=self.model.input, outputs=self.model.layers[1].output)
         return encoder.predict(valX)
 
+def autoencoder_transform(encoder , tX, type='skew', vae=False):
+    # Strip the moneyness or term structure feature
+    if type == 'skew':
+        structure = tX[:, -1:]
+        tX = tX[:, :-1]
+    else: # point model
+        structure = tX[:, -2:]
+        tX = tX[:, :-2]
+    
+    tX_transformed = encoder.predict(tX)
+
+    # Because vae is outputing the z_mean, z_log_var and z
+    if vae:
+        tX_transformed = tX_transformed[2]
+
+    # Add the structure back So we end up with our encoded features + structure at the end of each sample
+    tX_transformed = np.concatenate([tX_transformed, structure], axis=1)
+
+    return tX_transformed
+
+
 
 def autoencoder_fit(tX, ty, encoding_dim, TSTEPS=21, type='skew', vae=False):
     """
@@ -207,6 +229,7 @@ def autoencoder_fit(tX, ty, encoding_dim, TSTEPS=21, type='skew', vae=False):
         intermediate_dim = (encoding_dim+1)*(tX.shape[1]//TSTEPS)
     else:
         intermediate_dim = None
+    
 
     encoder = Autoencoder(encoding_dim, tX.shape[1], vae=vae, intermediate_dim=intermediate_dim)
     encoder.fit(tX)
@@ -399,12 +422,12 @@ def tskew_pred(otype, model_name='pca', TSTEPS=10, dd='./figs'):
             else:
                 vae_encoder.save('./tskew_feature_models/%s_ts_%s_%s_%s_encoder_gfigs.keras' % (model_name, TSTEPS, m, otype))
             # # transform and validate 
-            # Strip the moneyness or term structure feature
-            structure = vtskew[:, -1:]
-            vtskew = vtskew[:, :-1]
-            vX_transform = vae_encoder.predict(vtskew)[2]
-            vX_transform = np.concatenate([vX_transform, structure], axis=1)
-            ypred = model.predict(vX_transform)
+            # # Strip the moneyness or term structure feature
+            # structure = vtskew[:, -1:]
+            # vtskew = vtskew[:, :-1]
+            # vX_transform = vae_encoder.predict(vtskew)[2]
+            # vX_transform = np.concatenate([vX_transform, structure], axis=1)
+            # ypred = model.predict(vX_transform)
         else: # PCA
             n_components = TSTEPS//2 
             model = pca_fit(tskew, tYY, components=n_components, TSTEPS=TSTEPS)
@@ -603,21 +626,23 @@ def run_all_models():
 
 
 if __name__ == "__main__":
-    for n in ['call', 'put']:
-        for i in ['./figs', './gfigs']:
-            # for k in ['autoencoder', 'pca']:
-            #     for j in [5, 10, 20]:
-            #         print('Running for: ', n, i, k, j)
-            #         tskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
-            #         point_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
-            #         mskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
-            # Do a run for the HAR method
-            print('Running for: ', n, i, 'har')
-            tskew_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
-            mskew_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
-            point_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
-            print('Done for: ', i)
-        print('Done for: ', n)
+    # for n in ['call', 'put']:
+    #     for i in ['./figs', './gfigs']:
+    #         for k in ['vae']:
+    #             for j in [20]:
+    #                 print('Running for: ', n, i, k, j)
+    #                 tskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
+    #                 # point_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
+    #                 mskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
+    #         # Do a run for the HAR method
+    #         # print('Running for: ', n, i, 'har')
+    #         # tskew_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
+    #         # mskew_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
+    #         # point_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
+    #         print('Done for: ', i)
+    #     print('Done for: ', n)
+
+    tskew_pred(otype='call', model_name='vae', TSTEPS=20, dd='./figs')
 
     # for i in ['./gfigs']:
     #     print('Running for: ', i)
