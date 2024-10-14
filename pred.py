@@ -3,7 +3,7 @@
 import pandas as pd
 import os
 import fnmatch
-import zipfile as zip
+import zipfile as mzip
 from sklearn.linear_model import LinearRegression
 from sklearn.linear_model import Lasso, Ridge, ElasticNet
 from sklearn.multioutput import MultiOutputRegressor
@@ -41,6 +41,94 @@ UT = 366
 TSTEP = 5                       # days
 
 DAYS = 365
+
+
+# XXX: The class to perform Nelson-Siegel prediction of term structure
+class NS:
+    def __init__(self, xdf, TSTEPS, model):
+        if model == 'tsknsridge':
+            self.reg = Ridge()
+        elif model == 'tsknslasso':
+            self.reg = Lasso()
+        elif model == 'tsknsenet':
+            self.reg = ElasticNet()
+        self.xdf = xdf
+        self.TSTEPS = TSTEPS
+
+    def _getcoefs(self, vec, y=None):
+        print(vec.shape)
+        vec = vec[:, :-1]
+        vec = vec.reshape(vec.shape[0], self.TSTEPS,
+                          vec.shape[1]//self.TSTEPS)
+        # XXX: There are 3 coefficients in the latent NS space
+        xcoefs = np.array([1]*vec.shape[0]*vec.shape[1]*3)
+        xcoefs = xcoefs.reshape(vec.shape[0], vec.shape[1], 3)
+
+        # XXX: For each sample and each lag convert to latent NS space.
+        tot_r2_lreg = 0
+        tot = 0
+        for i in range(vec.shape[0]):
+            for j in range(vec.shape[1]):
+                lreg = LinearRegression().fit(self.xdf, vec[i, j])
+                tot_r2_lreg += lreg.score(self.xdf, vec[i, j])
+                tot += 1
+                # XXX: Get the coeffcients
+                xcoefs[i, j, 0] = lreg.intercept_
+                xcoefs[i, j, 1:] = lreg.coef_.T
+        print('Linear reg fit r2 score: ', tot_r2_lreg/tot)
+
+        # XXX: Shape the coeffcients correctly
+        xcoefs = xcoefs.reshape(xcoefs.shape[0],
+                                (xcoefs.shape[1] * xcoefs.shape[2]))
+
+        if y is not None:
+            ycoefs = np.array([1]*y.shape[0]*3).reshape(y.shape[0], 3)
+            # XXX: Get the betas for the output too!
+            for i in range(y.shape[0]):
+                lreg = LinearRegression().fit(self.xdf, y[i])
+                ycoefs[i, 0] = lreg.intercept_
+                ycoefs[i, 1:] = lreg.coef_
+
+        if y is None:
+            return xcoefs
+        else:
+            return xcoefs, ycoefs
+
+    def fit(self, vec, y):
+        # XXX: Fit the model for x to y coefficients
+        xcoefs, ycoefs = self._getcoefs(vec, y)
+        print('fit:', xcoefs.shape, ycoefs.shape)
+        self.reg = self.reg.fit(xcoefs, ycoefs)
+        print('Ridge weights:', self.reg.coef_)
+        print('Ridge intercept:', self.reg.intercept_)
+        print('Ridge r2 score:', self.reg.score(xcoefs, ycoefs))
+        return self.reg
+
+    def _predict(self, vec, pycoefs):
+        yp = np.array([1]*vec.shape[0]*self.xdf.shape[0]
+                      ).reshape(vec.shape[0], self.xdf.shape[0])
+        for i in range(yp.shape[0]):
+            yp[i] = np.dot(self.xdf, pycoefs[i, 1:]) + pycoefs[i, 0]
+        return yp
+
+    def score(self, vec, y):
+        check_is_fitted(self.reg)
+        xcoefs, ycoefs = self._getcoefs(vec, y)
+        pycoefs = self.reg.predict(xcoefs)
+        print('coeff shapes: ', ycoefs.shape, pycoefs.shape)
+        print(ycoefs[:5])
+        print(pycoefs[:5])
+        yp = self._predict(vec, pycoefs)
+        print(y.shape, yp.shape)
+        print(r2_score(y, yp))
+        assert (False)
+
+    def predict(self, vec):
+        # XXX: Predit the output given the input
+        xcoefs = self._getcoefs(vec)
+        pycoefs = self.reg.predict(xcoefs)
+        return self._predict(vec, pycoefs)
+        pass
 
 
 # XXX: The class to perform pls based regression
@@ -374,7 +462,7 @@ def main(mdir, years, months, instrument, dfs: dict):
                     # print(ff)
                     # XXX: Read the csvs
     for f in ff:
-        z = zip.ZipFile(mdir+f)
+        z = mzip.ZipFile(mdir+f)
         ofs = [i for i in z.namelist() if 'options_' in i]
         # print(ofs)
         # XXX: Now read just the option data files
@@ -930,7 +1018,6 @@ def mskew_pred(otype, dd='./figs', model='mskridge', TSTEPS=5):
         print(mskew.shape)
         u = reg.predict(mskew)
         print(u.shape)
-        assert (False)
         # print(reg.score(mskew, tYY))
         import pickle
         if dd != './gfigs':
@@ -958,6 +1045,12 @@ def tskew_pred(otype, dd='./figs', model='tskridge', TSTEPS=5):
     mms = np.arange(LM, UM+MSTEP, MSTEP)
 
     count = 0
+    if model == 'tsknsridge' or model == 'tsknslasso' or model == 'tsknsenet':
+        TTS = [i for i in range(LT, UT+TSTEP, TSTEP)]
+        LAMBDA = 0.0147     # from Guo 2014.
+        x1s = [(1-np.exp(-LAMBDA*i))/(LAMBDA*i) for i in TTS]
+        x2s = [i-(np.exp(-LAMBDA*t)) for (i, t) in zip(x1s, TTS)]
+        xdf = pd.DataFrame({'x1s': x1s, 'x2s': x2s})
 
     # XXX: Now we go term structure skew
     for j, m in enumerate(mms):
@@ -966,6 +1059,7 @@ def tskew_pred(otype, dd='./figs', model='tskridge', TSTEPS=5):
         count += 1
         # XXX: shape = samples, TSTEPS, moneyness, term structure
         tskew = tX[:, :, j]
+        # tskew1 = np.copy(tskew)  # needed for NS model
         tskew = tskew.reshape(tskew.shape[0], tskew.shape[1]*tskew.shape[2])
         # XXX: Add m to the sample set
         ms = np.array([m]*tskew.shape[0]).reshape(tskew.shape[0], 1)
@@ -976,15 +1070,21 @@ def tskew_pred(otype, dd='./figs', model='tskridge', TSTEPS=5):
             reg = Ridge(fit_intercept=True, alpha=1)
         elif model == 'tsklasso':
             reg = Lasso(fit_intercept=True, alpha=1)
+        elif model == 'tskenet':
+            reg = ElasticNet(fit_intercept=True, alpha=1)
         elif (model == 'tskplsridge' or model == 'tskplslasso' or
               model == 'tskplsenet'):
             tokeep = cca_comps(tskew, tYY)
             reg = MPls(tokeep, True, model)
             # reg = PLSRegression(tokeep)
-        else:
-            reg = ElasticNet(fit_intercept=True, alpha=1)
+        elif (model == 'tsknsridge' or model == 'tsknslasso' or
+              model == 'tsknsenet'):
+            # XXX: First we want to get the betas for each day using
+            # OLS. Next, we predict the betas for t using t-1,...t-N
+            # lags using one of the models.
+            reg = NS(xdf, TSTEPS, model)
         reg.fit(tskew, tYY)
-        # print(reg.score(tskew, tYY))
+        print(reg.score(tskew, tYY))
         import pickle
         if dd != './gfigs':
             with open('./tskew_models/%s_ts_%s_%s_%s.pkl' %
@@ -1093,23 +1193,25 @@ def linear_fit(otype):
     # Surface regression prediction (RUN THIS WITH OMP_NUM_THREADS=10 on
     # command line)
 
+    # XXX: Term structure skew regression
+    for j in ['./figs', './gfigs']:
+        for k in ['tsknsridge', 'tsknslasso', 'tsknsenet',
+                  # 'tskplsridge', 'tskplslasso', 'tskplsenet'
+                  # 'tskridge', 'tsklasso', 'tskenet'
+                  ]:
+            for i in [1, 10, 20]:
+                print('Doing: %s_%s_%s' % (k, j, i))
+                tskew_pred(otype, dd=j, model=k, TSTEPS=i)
+
     # XXX: Moneyness skew regression
     for j in ['./figs', './gfigs']:
-        for k in ['mskplslasso', 'mskplsridge', 'mskplsenet'
+        for k in ['msknsridge', 'msknslasso', 'msknsenet',
+                  # 'mskplslasso', 'mskplsridge', 'mskplsenet'
                   # 'mskridge', 'msklasso', 'mskenet'
                   ]:
             for i in [5, 10, 20]:
                 print('Doing: %s_%s_%s' % (k, j, i))
                 mskew_pred(otype, dd=j, model=k, TSTEPS=i)
-
-    # XXX: Term structure skew regression
-    for j in ['./figs', './gfigs']:
-        for k in ['tskplsridge', 'tskplslasso', 'tskplsenet'
-                  # 'tskridge', 'tsklasso', 'tskenet'
-                  ]:
-            for i in [5, 10, 20]:
-                print('Doing: %s_%s_%s' % (k, j, i))
-                tskew_pred(otype, dd=j, model=k, TSTEPS=i)
 
     # XXX: Point regression
     for j in ['./figs', './gfigs']:
