@@ -44,7 +44,7 @@ DAYS = 365
 
 
 # XXX: The class to perform Nelson-Siegel prediction of term structure
-class NS:
+class NST:
     def __init__(self, xdf, TSTEPS, model):
         if model == 'tsknsridge':
             self.reg = Ridge()
@@ -1071,7 +1071,7 @@ def tskew_pred(otype, dd='./figs', model='tskridge', TSTEPS=5):
             # XXX: First we want to get the betas for each day using
             # OLS. Next, we predict the betas for t using t-1,...t-N
             # lags using one of the models.
-            reg = NS(xdf, TSTEPS, model)
+            reg = NST(xdf, TSTEPS, model)
         reg.fit(tskew, tYY)
         print(reg.score(tskew, tYY))
         assert (False)
@@ -1185,11 +1185,11 @@ def linear_fit(otype):
 
     # XXX: Term structure skew regression
     for j in ['./figs', './gfigs']:
-        for k in ['tsknsenet', 'tsknslasso', 'tsknsridge',
+        for k in ['tsknsridge', 'tsknslasso', 'tsknsenet',
                   # 'tskplsridge', 'tskplslasso', 'tskplsenet'
                   # 'tskridge', 'tsklasso', 'tskenet'
                   ]:
-            for i in [5, 10, 20]:
+            for i in [5, 20, 10]:
                 print('Doing: %s_%s_%s' % (k, j, i))
                 tskew_pred(otype, dd=j, model=k, TSTEPS=i)
 
