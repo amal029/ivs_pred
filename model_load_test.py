@@ -124,7 +124,7 @@ def plot_hmap_features(vv, X, Y, name):
     plt.close(fig)
     # plt.show()
 
-def extract_features(X, t, model, dd, TSTEPS, feature_res, type='mskew'):
+def extract_features(X, t, model, dd, TSTEPS, feature_res, type='mskew', otype='call'):
     """
     Returns the features extracted from the input data ready for prediction
     using corrisponding model
@@ -134,19 +134,20 @@ def extract_features(X, t, model, dd, TSTEPS, feature_res, type='mskew'):
     transform_type = type[1:]
     if(model == 'pca'):
         X = fe.pca_transform(X, feature_res, TSTEPS=TSTEPS, type=transform_type)
-    elif(model == 'autoencoder'):
-        X = X.reshape(X.shape[0], X.shape[1]*X.shape[2])
+    elif(model == 'autoencoder' or model == 'vae'):
 
         # Load the encoder model
         if dd == './figs':
-            toopen = './%s_feature_models/%s_ts_%s_%s_encoder.keras' % (type, model, TSTEPS, t)
+            toopen = './%s_feature_models/%s_ts_%s_%s_%s_encoder.keras' % (type, model, TSTEPS, t, otype)
         else:
-            toopen = './%s_feature_models/%s_ts_%s_%s_encoder_gfigs.keras' % (type, model, TSTEPS, t)
+            toopen = './%s_feature_models/%s_ts_%s_%s_%s_encoder_gfigs.keras' % (type, model, TSTEPS, t, otype)
 
         encoder = keras.saving.load_model(toopen) 
         # Get encoder
-        encoder = keras.Model(inputs=encoder.input, outputs=encoder.layers[1].output)
-        X = encoder.predict(X)
+        if model == 'autoencoder':
+            encoder = keras.Model(inputs=encoder.input, outputs=encoder.layers[1].output)
+
+        X = fe.autoencoder_transform(X, encoder, TSTEPS=TSTEPS, type=transform_type)
     else:
         X = fe.har_transform(X, TSTEPS=TSTEPS, type=transform_type)
     return X
@@ -154,9 +155,9 @@ def extract_features(X, t, model, dd, TSTEPS, feature_res, type='mskew'):
 def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         get_features=False, feature_res=10):
     # Har feature extraction model required 32 lags
-    if (model == 'mskhar' or model == 'tskhar' or model == 'pmhar'):
-        feature_res = 3
-        TSTEPS = 32
+    # if (model == 'mskhar' or model == 'tskhar' or model == 'pmhar'):
+    #     feature_res = 3
+    #     TSTEPS = 32
 
     # XXX: Num 3000 == '20140109'
     START_DATE = '20140109'
@@ -178,8 +179,8 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         bs = 40
     elif pred.TSTEPS == 20:
         bs = 20
-    elif pred.TSTEPS == 32: # Exception for har feature extraction
-        bs = 10
+    elif pred.TSTEPS == 21: # Exception for har feature extraction
+        bs = 20 
     else:
         raise Exception("TSTEPS not correct")
 
@@ -329,8 +330,9 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         if not plot:
             out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
-    elif model == 'mskautoencoder' or model == 'mskpca' or model == 'mskhar':
+    elif model == 'mskautoencoder' or model == 'mskpca' or model == 'mskhar' or model == 'mskvae':
         import feature_extraction as fe
+        from feature_extraction import Sampling
         # XXX: The output vector
         out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
         out = out.reshape(*valY.shape)
@@ -342,18 +344,22 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         model_name = model[3:]
         for j, t in enumerate(tts):
             if dd == './figs':
-                with open('./mskew_feature_models/%s_ts_%s_%s.pkl' %
-                          (model_name, TSTEPS, t), 'rb') as f:
+                with open('./mskew_feature_models/%s_ts_%s_%s_%s.pkl' %
+                          (model_name, TSTEPS, t, otype), 'rb') as f:
                     m1 = pickle.load(f)
             else:
-                with open('./mskew_feature_models/%s_ts_%s_%s_gfigs.pkl' %
-                          (model_name, TSTEPS, t), 'rb') as f:
+                with open('./mskew_feature_models/%s_ts_%s_%s_%s_gfigs.pkl' %
+                          (model_name, TSTEPS, t, otype), 'rb') as f:
                     m1 = pickle.load(f)
                     
             mskew = valX[:, :, :, j]
+            mskew = mskew.reshape(mskew.shape[0], mskew.shape[1]*mskew.shape[2])
+            # XXX: Add t to the sample set
+            ts = np.array([t]*mskew.shape[0]).reshape(mskew.shape[0], 1)
+            mskew = np.append(mskew, ts, axis=1)
 
             # Extract features before prediction
-            mskew = extract_features(mskew, t, model_name, dd, TSTEPS, feature_res, type='mskew')
+            mskew = extract_features(mskew, t, model_name, dd, TSTEPS, feature_res, type='mskew', otype=otype)
 
             out[:, :, j] = m1.predict(mskew)
 
@@ -364,11 +370,11 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                     markers = [(3+i, 1, 0) for i in range(feature_res)]
                     for mts in MONEYNESS:
                         # XXX: The term structure weights
-                        ws = m1.coef_[mts][:].reshape(feature_res, MS)
-                        # # # XXX: The term structure weight
-                        # wms = m1.coef_[mts][-1]
-                        # # XXX: Make sure that the term structure weight=nil
-                        # assert (abs(wms) < 1e-4)
+                        ws = m1.coef_[mts][:-1].reshape(feature_res, MS)
+                        # XXX: The term structure weight
+                        wms = m1.coef_[mts][-1]
+                        # XXX: Make sure that the term structure weight=nil
+                        assert (abs(wms) < 1e-4)
                         # XXX: Now just plot the 2d curves
                         fig, ax = plt.subplots()
                         for i in range(feature_res):
@@ -378,8 +384,8 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                         ax.set_xlabel('Moneyness')
                         ax.legend(ncol=3)
                         dfname = dd.split('/')[1]
-                        fname = './plots/%s_m_%s_t_%s_lags_%s_%s.pdf' % (
-                            model, X[mts], t, TSTEPS, dfname)
+                        fname = './plots/%s_m_%s_t_%s_lags_%s_%s_%s.pdf' % (
+                            model, X[mts], t, TSTEPS, otype, dfname)
                         plt.savefig(fname, bbox_inches='tight')
                         plt.close(fig)
         if not plot:
@@ -388,8 +394,9 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
 
 
 
-    elif model == 'tskautoencoder' or model == 'tskpca' or model == 'tskhar':
+    elif model == 'tskautoencoder' or model == 'tskpca' or model == 'tskhar' or model == 'tskvae':
         import feature_extraction as fe
+        from feature_extraction import Sampling
         # XXX: The output vector
         out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
         out = out.reshape(*valY.shape)
@@ -399,17 +406,22 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         model_name = model[3:]
         for j, m in enumerate(mms):
             if dd == './figs':
-                with open('./tskew_feature_models/%s_ts_%s_%s.pkl' %
-                          (model_name, TSTEPS, m), 'rb') as f:
+                with open('./tskew_feature_models/%s_ts_%s_%s_%s.pkl' %
+                          (model_name, TSTEPS, m, otype), 'rb') as f:
                     m1 = pickle.load(f)
             else:
-                with open('./tskew_feature_models/%s_ts_%s_%s_gfigs.pkl' %
-                          (model_name, TSTEPS, m), 'rb') as f:
+                with open('./tskew_feature_models/%s_ts_%s_%s_%s_gfigs.pkl' %
+                          (model_name, TSTEPS, m, otype), 'rb') as f:
                     m1 = pickle.load(f)
             tskew = valX[:, :, j]
+            tskew = tskew.reshape(tskew.shape[0], tskew.shape[1]*tskew.shape[2])
+
+            # XXX: Add m to the sample set
+            ms = np.array([m]*tskew.shape[0]).reshape(tskew.shape[0], 1)
+            tskew = np.append(tskew, ms, axis=1)
             
             # Extract features before prediction
-            tskew = extract_features(tskew, m, model_name, dd, TSTEPS, feature_res, type='tskew')
+            tskew = extract_features(tskew, m, model_name, dd, TSTEPS, feature_res, type='tskew', otype=otype)
 
             # XXX: Predict the output
             out[:, j] = m1.predict(tskew)
@@ -424,11 +436,11 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                     markers = [(3+i, 1, 0) for i in range(feature_res)]
                     for mts in TERM:
                         # XXX: The term structure weights
-                        ws = m1.coef_[mts][:].reshape(feature_res, TS)
-                        # # XXX: The moneyness weight
-                        # wms = m1.coef_[mts][-1]
-                        # # XXX: Make sure that the moneyness weight is nothing
-                        # assert (abs(wms) < 1e-4)
+                        ws = m1.coef_[mts][:-1].reshape(feature_res, TS)
+                        # XXX: The moneyness weight
+                        wms = m1.coef_[mts][-1]
+                        # XXX: Make sure that the moneyness weight is nothing
+                        assert (abs(wms) < 1e-4)
                         # XXX: Now just plot the 2d curves
                         fig, ax = plt.subplots()
                         for i in range(feature_res):
@@ -438,8 +450,8 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                         ax.set_xlabel('Term structure')
                         ax.legend(ncol=3)
                         dfname = dd.split('/')[1]
-                        fname = './plots/%s_m_%s_t_%s_lags_%s_%s.pdf' % (
-                            model, m, X[mts], TSTEPS, dfname)
+                        fname = './plots/%s_m_%s_t_%s_lags_%s_%s_%s.pdf' % (
+                            model, m, X[mts], TSTEPS, otype, dfname)
                         plt.savefig(fname, bbox_inches='tight')
                         plt.close(fig)
 
@@ -447,8 +459,9 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
 
-    elif model == 'pmpca' or model == 'pmhar':
+    elif model == 'pmautoencoder' or model == 'pmhar':
         import feature_extraction as fe
+        from feature_extraction import Sampling
         # XXX: The output vector
         out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
         out = out.reshape(*valY.shape)
@@ -461,18 +474,18 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         for i, s in enumerate(mms):
             for j, t in enumerate(tts):
                 if dd == './figs':
-                    with open('./point_feature_models/%s_ts_%s_%s_%s.pkl' %
-                              (model_name, TSTEPS, s, t), 'rb') as f:
+                    with open('./point_feature_models/%s_ts_%s_%s_%s_%s.pkl' %
+                              (model_name, TSTEPS, s, t, otype), 'rb') as f:
                         m1 = pickle.load(f)
                 else:
-                    with open('./point_feature_models/%s_ts_%s_%s_%s_gfigs.pkl' %
-                              (model_name, TSTEPS, s, t), 'rb') as f:
+                    with open('./point_feature_models/%s_ts_%s_%s_%s_%s_gfigs.pkl' %
+                              (model_name, TSTEPS, s, t, otype), 'rb') as f:
                         m1 = pickle.load(f)
                 # XXX: Now make the prediction
                 k = np.array([s, t]*valX.shape[0]).reshape(valX.shape[0], 2)
                 val_vec = np.append(valX[:, :, i, j], k, axis=1)
                 # Extract features before prediction
-                val_vec = extract_features(val_vec, t, model_name, dd, TSTEPS, feature_res, type='point')
+                val_vec = extract_features(val_vec, t, model_name, dd, TSTEPS, feature_res, type='point', otype=otype)
                 out[:, i, j] = m1.predict(val_vec)
 
                 # XXX: Feature vector plot
@@ -487,8 +500,8 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                         ax.set_ylabel('Coefficient magnitudes')
                         plt.xticks(fontsize=9, rotation=45)
                         dfname = dd.split('/')[1]
-                        fname = './plots/%s_m_%s_t_%s_lags_%s_%s.pdf' % (
-                            model, s, t, TSTEPS, dfname)
+                        fname = './plots/%s_m_%s_t_%s_lags_%s_%s_%s.pdf' % (
+                            model, s, t, TSTEPS, otype, dfname)
                         plt.savefig(fname, bbox_inches='tight')
                         plt.close(fig)
         if not plot:
@@ -751,22 +764,25 @@ def overall(fname):
 
 
 def model_v_model(otype):
-    TTS = [20, 10, 5]
+    TTS = [10, 5]
     # models = ['ridge', 'lasso',  # 'rf',
     #           'enet',  # 'keras',
     #           'pmridge', 'pmlasso', 'pmenet', 'mskridge',
     #           'msklasso', 'mskenet', 'tskridge', 'tsklasso', 'tskenet']
     models = [
-              'mskridge', 'mskautoencoder', 'mskpca',
-              'tskridge', 'tskautoencoder', 'tskpca', 
-              'pmridge', 'pmpca'
+                # 'mskhar', 'tskhar', 'pmhar', 'mskridge', 'tskridge', 'pmridge',
+                'tskvae',
+                'mskvae',
+            #   'mskridge', 'mskautoencoder', 'mskpca', 'mskvae', 'mskhar',
+            #   'tskridge', 'tskautoencoder', 'tskpca', 'tskvae', 'mskhar'
+            #   'pmridge', 'pmhar', 'pmautoencoder'
               ]
     fp = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
                                                              len(models))
           for t in TTS}
-    # fd = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
-    #                                                          len(models))
-    #       for t in TTS}
+    fd = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
+                                                             len(models))
+          for t in TTS}
 
     cache = {i: {j: {k: None for k in models} for j in TTS}
              for i in ['./figs', './gfigs']}
@@ -779,41 +795,62 @@ def model_v_model(otype):
                 for j in range(i+1, len(models)):
                     feature_res = t//2
                     if cache[dd][t][models[i]] is None:
+                        TSTEPS = t
                         # due to pca n_components restriction
-                        if models[i] in ['mskpca', 'tskpca', 'pmpca']:
-                            feature_res = t//4 
-                        dates, y, yp = main(plot=False, TSTEPS=t,
+                        # if models[i] in ['mskpca', 'tskpca', 'pmpca']:
+                        #     feature_res = t//2 
+                        if models[i][-3:] == 'har':
+                            feature_res = 3
+                            TSTEPS = 21
+                        dates, y, yp = main(plot=False, TSTEPS=TSTEPS,
                                             model=models[i],
                                             get_features=True,
                                             dd=dd,
-                                            feature_res=feature_res)
+                                            feature_res=feature_res,
+                                            otype=otype)
                         cache[dd][t][models[i]] = (dates, y, yp)
                     else:
                         _, y, yp = cache[dd][t][models[i]]
                     if cache[dd][t][models[j]] is None:
-                        dates, yk, ypk = main(otype, plot=False, TSTEPS=t,
+                        TSTEPS = t
+                        if models[j][-3:] == 'har':
+                            feature_res = 3
+                            TSTEPS = 21
+                        dates, yk, ypk = main(plot=False, TSTEPS=TSTEPS,
                                               model=models[j],
                                               get_features=True,
                                               dd=dd,
-                                              feature_res=feature_res)
+                                              feature_res=feature_res,
+                                              otype=otype)
                         cache[dd][t][models[j]] = (dates, yk, ypk)
                     else:
                         _, yk, ypk = cache[dd][t][models[j]]
+
+                    if not np.array_equal(y, yk):
+                        to_remove = np.abs(y.shape[0] - yk.shape[0])
+                        if len(y) > len(yk):
+                            # shave off the last few samples to compare to har 21
+                            y = y[:-to_remove, :]
+                            yp = yp[:-to_remove, :]
+                        else:
+                            # shave off the last few samples to compare to har 21
+                            yk = yk[:-to_remove, :]
+                            ypk = ypk[:-to_remove, :]
                     # assert (np.array_equal(y, yk))
                     # XXX: Now we can do Diebold mariano test
-                    # try:
-                    #     dstat, pval = dmtest.dm_test(y, yp, ypk)
-                    # except dmtest.ZeroVarianceException:
-                    #     dstat, pval = np.nan, np.nan
-                    # fd[t][i][j] = dstat
-                    # fp[t][i][j] = pval
+                    try:
+                        dstat, pval = dmtest.dm_test(y, yp, ypk)
+                    except dmtest.ZeroVarianceException:
+                        dstat, pval = np.nan, np.nan
+                    fd[t][i][j] = dstat
+                    fp[t][i][j] = pval
         # XXX: Save the results
-        # header = ','.join(models)
-        # for t in fp.keys():
-        #     np.savetxt('pval_%s_%s.csv' % (t, dd.split('/')[1]), fp[t],
-        #                delimiter=',', header=header)
-        #     np.savetxt('dstat_%s_%s.csv' % (t, dd.split('/')[1]), fd[t],
-        #                delimiter=',', header=header)
+        header = ','.join(models)
+        for t in fp.keys():
+            np.savetxt('pval_%s_%s.csv' % (t, dd.split('/')[1]), fp[t],
+                       delimiter=',', header=header)
+            np.savetxt('dstat_%s_%s.csv' % (t, dd.split('/')[1]), fd[t],
+                       delimiter=',', header=header)
 
     # XXX: Save all the results
     print('Saving results')
@@ -1109,8 +1146,8 @@ if __name__ == '__main__':
     plt.style.use('seaborn-v0_8-whitegrid')
 
     # XXX: model vs model
-    # for otype in ['call', 'put']:
-    #     model_v_model(otype)
+    for otype in ['call', 'put']:
+        model_v_model(otype)
 
     # for otype in ['call', 'put']:
     #     # XXX: Plot the bar graph for overall results
@@ -1123,5 +1160,5 @@ if __name__ == '__main__':
     #     call_dmtest(otype)
 
     # XXX: r2_score for moneyness and term structure
-    for otype in ['call', 'put']:
-        r2_rmse_score_mt(otype)
+    # for otype in ['call', 'put']:
+    #     r2_rmse_score_mt(otype)
