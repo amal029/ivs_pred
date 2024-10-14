@@ -56,79 +56,68 @@ class NS:
         self.TSTEPS = TSTEPS
 
     def _getcoefs(self, vec, y=None):
-        print(vec.shape)
         vec = vec[:, :-1]
         vec = vec.reshape(vec.shape[0], self.TSTEPS,
                           vec.shape[1]//self.TSTEPS)
         # XXX: There are 3 coefficients in the latent NS space
-        xcoefs = np.array([1]*vec.shape[0]*vec.shape[1]*3)
-        xcoefs = xcoefs.reshape(vec.shape[0], vec.shape[1], 3)
-
+        xcoefs = list()
         # XXX: For each sample and each lag convert to latent NS space.
         tot_r2_lreg = 0
         tot = 0
         for i in range(vec.shape[0]):
+            xxcoefs = list()
             for j in range(vec.shape[1]):
                 lreg = LinearRegression().fit(self.xdf, vec[i, j])
                 tot_r2_lreg += lreg.score(self.xdf, vec[i, j])
                 tot += 1
+                ml = [lreg.coef_[0], lreg.coef_[1], lreg.intercept_]
                 # XXX: Get the coeffcients
-                xcoefs[i, j, 0] = lreg.intercept_
-                xcoefs[i, j, 1:] = lreg.coef_.T
-        print('Linear reg fit r2 score: ', tot_r2_lreg/tot)
+                xxcoefs += [ml]
+            xcoefs += [xxcoefs]
+        xcoefs = np.array(xcoefs)
 
         # XXX: Shape the coeffcients correctly
         xcoefs = xcoefs.reshape(xcoefs.shape[0],
                                 (xcoefs.shape[1] * xcoefs.shape[2]))
 
         if y is not None:
-            ycoefs = np.array([1]*y.shape[0]*3).reshape(y.shape[0], 3)
+            ycoefs = list()
             # XXX: Get the betas for the output too!
             for i in range(y.shape[0]):
                 lreg = LinearRegression().fit(self.xdf, y[i])
-                ycoefs[i, 0] = lreg.intercept_
-                ycoefs[i, 1:] = lreg.coef_
-
-        if y is None:
-            return xcoefs
-        else:
+                ml = [lreg.coef_[0], lreg.coef_[1], lreg.intercept_]
+                ycoefs += [ml]
+            ycoefs = np.array(ycoefs)
             return xcoefs, ycoefs
+        else:
+            return xcoefs
 
     def fit(self, vec, y):
         # XXX: Fit the model for x to y coefficients
         xcoefs, ycoefs = self._getcoefs(vec, y)
-        print('fit:', xcoefs.shape, ycoefs.shape)
         self.reg = self.reg.fit(xcoefs, ycoefs)
-        print('Ridge weights:', self.reg.coef_)
-        print('Ridge intercept:', self.reg.intercept_)
-        print('Ridge r2 score:', self.reg.score(xcoefs, ycoefs))
         return self.reg
 
-    def _predict(self, vec, pycoefs):
-        yp = np.array([1]*vec.shape[0]*self.xdf.shape[0]
-                      ).reshape(vec.shape[0], self.xdf.shape[0])
-        for i in range(yp.shape[0]):
-            yp[i] = np.dot(self.xdf, pycoefs[i, 1:]) + pycoefs[i, 0]
+    def _predict(self, pycoefs):
+        yp = list()
+        for i in range(pycoefs.shape[0]):
+            mm = np.dot(self.xdf, pycoefs[i, :2]) + pycoefs[i, 2]
+            yp += [mm]
+        yp = np.array(yp)
         return yp
 
     def score(self, vec, y):
         check_is_fitted(self.reg)
-        xcoefs, ycoefs = self._getcoefs(vec, y)
+        xcoefs = self._getcoefs(vec)
         pycoefs = self.reg.predict(xcoefs)
-        print('coeff shapes: ', ycoefs.shape, pycoefs.shape)
-        print(ycoefs[:5])
-        print(pycoefs[:5])
-        yp = self._predict(vec, pycoefs)
-        print(y.shape, yp.shape)
-        print(r2_score(y, yp))
-        assert (False)
+        yp = self._predict(pycoefs)
+        return r2_score(y, yp)
 
     def predict(self, vec):
         # XXX: Predit the output given the input
         xcoefs = self._getcoefs(vec)
         pycoefs = self.reg.predict(xcoefs)
         return self._predict(vec, pycoefs)
-        pass
 
 
 # XXX: The class to perform pls based regression
@@ -1085,6 +1074,7 @@ def tskew_pred(otype, dd='./figs', model='tskridge', TSTEPS=5):
             reg = NS(xdf, TSTEPS, model)
         reg.fit(tskew, tYY)
         print(reg.score(tskew, tYY))
+        assert (False)
         import pickle
         if dd != './gfigs':
             with open('./tskew_models/%s_ts_%s_%s_%s.pkl' %
@@ -1195,11 +1185,11 @@ def linear_fit(otype):
 
     # XXX: Term structure skew regression
     for j in ['./figs', './gfigs']:
-        for k in ['tsknsridge', 'tsknslasso', 'tsknsenet',
+        for k in ['tsknsenet', 'tsknslasso', 'tsknsridge',
                   # 'tskplsridge', 'tskplslasso', 'tskplsenet'
                   # 'tskridge', 'tsklasso', 'tskenet'
                   ]:
-            for i in [1, 10, 20]:
+            for i in [5, 10, 20]:
                 print('Doing: %s_%s_%s' % (k, j, i))
                 tskew_pred(otype, dd=j, model=k, TSTEPS=i)
 
