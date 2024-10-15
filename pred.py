@@ -60,34 +60,30 @@ class NST:
         vec = vec.reshape(vec.shape[0], self.TSTEPS,
                           vec.shape[1]//self.TSTEPS)
         # XXX: There are 3 coefficients in the latent NS space
-        xcoefs = list()
+        xcoefs = np.array([1.0]*vec.shape[0]*vec.shape[1]*3).reshape(
+            vec.shape[0], vec.shape[1], 3
+        )
         # XXX: For each sample and each lag convert to latent NS space.
         tot_r2_lreg = 0
         tot = 0
         for i in range(vec.shape[0]):
-            xxcoefs = list()
+            # xxcoefs = list()
             for j in range(vec.shape[1]):
-                lreg = LinearRegression().fit(self.xdf, vec[i, j])
+                lreg = LinearRegression(n_jobs=-1).fit(self.xdf, vec[i, j])
                 tot_r2_lreg += lreg.score(self.xdf, vec[i, j])
                 tot += 1
-                ml = [lreg.coef_[0], lreg.coef_[1], lreg.intercept_]
-                # XXX: Get the coeffcients
-                xxcoefs += [ml]
-            xcoefs += [xxcoefs]
-        xcoefs = np.array(xcoefs)
+                xcoefs[i, j] = [lreg.coef_[0], lreg.coef_[1], lreg.intercept_]
 
         # XXX: Shape the coeffcients correctly
         xcoefs = xcoefs.reshape(xcoefs.shape[0],
                                 (xcoefs.shape[1] * xcoefs.shape[2]))
 
         if y is not None:
-            ycoefs = list()
+            ycoefs = np.array([1.0]*y.shape[0]*3).reshape(y.shape[0], 3)
             # XXX: Get the betas for the output too!
             for i in range(y.shape[0]):
                 lreg = LinearRegression().fit(self.xdf, y[i])
-                ml = [lreg.coef_[0], lreg.coef_[1], lreg.intercept_]
-                ycoefs += [ml]
-            ycoefs = np.array(ycoefs)
+                ycoefs[i] = [lreg.coef_[0], lreg.coef_[1], lreg.intercept_]
             return xcoefs, ycoefs
         else:
             return xcoefs
@@ -99,11 +95,10 @@ class NST:
         return self.reg
 
     def _predict(self, pycoefs):
-        yp = list()
+        yp = np.array([1.0]*pycoefs.shape[0]*self.xdf.shape[0]).reshape(
+            pycoefs.shape[0], self.xdf.shape[0])
         for i in range(pycoefs.shape[0]):
-            mm = np.dot(self.xdf, pycoefs[i, :2]) + pycoefs[i, 2]
-            yp += [mm]
-        yp = np.array(yp)
+            yp[i] = np.dot(self.xdf, pycoefs[i, :2]) + pycoefs[i, 2]
         return yp
 
     def score(self, vec, y):
@@ -159,7 +154,7 @@ class MPls:
                 y_std[y_std == 0.0] = 1.0
             else:
                 y_std = 1.0 if y_std == 0.0 else y_std
-            Y /= y_std
+                Y /= y_std
         else:
             x_std = np.ones(X.shape[1])
             y_std = np.ones(Y.shape[1])
@@ -222,7 +217,7 @@ def getr(row, mk):
         d1 = norm.ppf(delta)
     else:
         d1 = norm.ppf(1 + delta)
-    # XXX: Now compute the interest rate
+        # XXX: Now compute the interest rate
     r = ((d1 * sigma * np.sqrt(t)) - np.log(S/K))/t - (sigma**2/2)
     # XXX: DEBUG
     dd1 = 1/(sigma*np.sqrt(t)) * (np.log(S/K) + (r + sigma**2/2)*t)
@@ -778,25 +773,25 @@ def plot_predicted_outputs_reg(vY, vYP, TSTEPS):
         for cm, m in enumerate(MS):
             for ct, t in enumerate(TS):
                 ydf.append([m, t, y[cm, ct]])
-        ydf = np.array(ydf)
-        axs[0].plot_trisurf(ydf[:, 0], ydf[:, 1], ydf[:, 2],
-                            cmap='afmhot', linewidth=0.2,
-                            antialiased=True)
-        axs[0].set_xlabel('Moneyness')
-        axs[0].set_ylabel('Term structure')
-        axs[0].set_zlabel('Vol %')
-        axs[1].title.set_text('Predicted')
-        ypdf = list()
+                ydf = np.array(ydf)
+                axs[0].plot_trisurf(ydf[:, 0], ydf[:, 1], ydf[:, 2],
+                                    cmap='afmhot', linewidth=0.2,
+                                    antialiased=True)
+                axs[0].set_xlabel('Moneyness')
+                axs[0].set_ylabel('Term structure')
+                axs[0].set_zlabel('Vol %')
+                axs[1].title.set_text('Predicted')
+                ypdf = list()
         for cm, m in enumerate(MS):
             for ct, t in enumerate(TS):
                 ypdf.append([m, t, yp[cm, ct]])
-        ypdf = np.array(ypdf)
-        axs[1].plot_trisurf(ypdf[:, 0], ypdf[:, 1], ypdf[:, 2],
-                            cmap='afmhot', linewidth=0.2,
-                            antialiased=True)
-        axs[1].set_xlabel('Moneyness')
-        axs[1].set_ylabel('Term structure')
-        axs[1].set_zlabel('Vol %')
+                ypdf = np.array(ypdf)
+                axs[1].plot_trisurf(ypdf[:, 0], ypdf[:, 1], ypdf[:, 2],
+                                    cmap='afmhot', linewidth=0.2,
+                                    antialiased=True)
+                axs[1].set_xlabel('Moneyness')
+                axs[1].set_ylabel('Term structure')
+                axs[1].set_zlabel('Vol %')
 
         plt.show()
         plt.close()
@@ -877,7 +872,7 @@ def regression_predict(otype, dd='./figs', model='Ridge', TSTEPS=10):
             tokeep = cca_comps(tX, tY)
         else:
             tokeep = cca_comps(tX, tY, N_COMP=20)
-        # XXX: Get the score and predict using scores then get it back
+            # XXX: Get the score and predict using scores then get it back
         treg = model
         reg = MPls(tokeep, intercept, model)
 
@@ -983,8 +978,8 @@ def mskew_pred(otype, dd='./figs', model='mskridge', TSTEPS=5):
     for j, t in enumerate(tts):
         if count % 10 == 0:
             print('Done: ', count)
-        count += 1
-        # XXX: shape = samples, TSTEPS, moneyness, term structure
+            count += 1
+            # XXX: shape = samples, TSTEPS, moneyness, term structure
         mskew = tX[:, :, :, j]
         tYY = tY[:, :, j]
         mskew = mskew.reshape(mskew.shape[0], mskew.shape[1]*mskew.shape[2])
@@ -1003,11 +998,11 @@ def mskew_pred(otype, dd='./figs', model='mskridge', TSTEPS=5):
             reg = MPls(tokeep, True, model)
         else:
             reg = ElasticNet(fit_intercept=True, alpha=1)
-        reg.fit(mskew, tYY)
-        print(mskew.shape)
-        u = reg.predict(mskew)
-        print(u.shape)
-        # print(reg.score(mskew, tYY))
+            reg.fit(mskew, tYY)
+            print(mskew.shape)
+            u = reg.predict(mskew)
+            print(u.shape)
+            # print(reg.score(mskew, tYY))
         import pickle
         if dd != './gfigs':
             with open('./mskew_models/%s_ts_%s_%s_%s.pkl' %
@@ -1045,8 +1040,8 @@ def tskew_pred(otype, dd='./figs', model='tskridge', TSTEPS=5):
     for j, m in enumerate(mms):
         if count % 10 == 0:
             print('Done: ', count)
-        count += 1
-        # XXX: shape = samples, TSTEPS, moneyness, term structure
+            count += 1
+            # XXX: shape = samples, TSTEPS, moneyness, term structure
         tskew = tX[:, :, j]
         # tskew1 = np.copy(tskew)  # needed for NS model
         tskew = tskew.reshape(tskew.shape[0], tskew.shape[1]*tskew.shape[2])
@@ -1189,7 +1184,7 @@ def linear_fit(otype):
                   # 'tskplsridge', 'tskplslasso', 'tskplsenet'
                   # 'tskridge', 'tsklasso', 'tskenet'
                   ]:
-            for i in [5, 20, 10]:
+            for i in [20, 5, 10]:
                 print('Doing: %s_%s_%s' % (k, j, i))
                 tskew_pred(otype, dd=j, model=k, TSTEPS=i)
 
