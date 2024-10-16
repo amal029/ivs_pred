@@ -18,6 +18,7 @@ from keras.models import Model
 from keras import ops
 from keras import layers
 import tensorflow as tf
+import multiprocessing
 
 import pred
 
@@ -109,7 +110,7 @@ class Autoencoder:
         else: 
             self.model = self.autoencoder_build()
 
-    def fit(self, tX, epochs=100, batch_size=20, shuffle=True, validation_split=0.2):
+    def fit(self, tX, epochs=100, batch_size=125, shuffle=True, validation_split=0.2):
         # reduce learning rate
         reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='loss', factor=0.2, patience=5, min_lr=0.0001)
         # Early stopping
@@ -507,12 +508,16 @@ def mskew_pred(otype, model_name='pca', TSTEPS=10, dd='./figs'):
             # ypred = model.predict(valX_transform)
         elif model_name == 'vae':
             encoding_dim = TSTEPS//2
-            vae_encoder, model = autoencoder_fit(mskew, tYY, encoding_dim=encoding_dim,TSTEPS=TSTEPS, vae=True)
-            # Save encoder model
-            if dd != './gfigs':
-                vae_encoder.save('./mskew_feature_models/%s_ts_%s_%s_%s_encoder.keras' % (model_name, TSTEPS, t, otype))
-            else:
-                vae_encoder.save('./mskew_feature_models/%s_ts_%s_%s_%s_encoder_gfigs.keras' % (model_name, TSTEPS, t, otype))
+            def fit_and_save():
+                vae_encoder, model = autoencoder_fit(mskew, tYY, encoding_dim=encoding_dim,TSTEPS=TSTEPS, vae=True)
+                
+                # Save encoder model
+                if dd != './gfigs':
+                    vae_encoder.save('./mskew_feature_models/%s_ts_%s_%s_%s_encoder.keras' % (model_name, TSTEPS, t, otype))
+                else:
+                    vae_encoder.save('./mskew_feature_models/%s_ts_%s_%s_%s_encoder_gfigs.keras' % (model_name, TSTEPS, t, otype))
+                return model
+            model = fit_and_save() 
             # # transform and validate 
             # valX_transform = vae_encoder.predict(vmskew)
             # ypred = model.predict(valX_transform)
@@ -626,32 +631,44 @@ def run_all_models():
 
 
 if __name__ == "__main__":
-    # for n in ['call', 'put']:
-    #     for i in ['./figs', './gfigs']:
-    #         for k in ['vae']:
-    #             for j in [20]:
-    #                 print('Running for: ', n, i, k, j)
-    #                 tskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
-    #                 # point_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
-    #                 mskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
-    #         # Do a run for the HAR method
-    #         # print('Running for: ', n, i, 'har')
-    #         # tskew_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
-    #         # mskew_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
-    #         # point_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
-    #         print('Done for: ', i)
-    #     print('Done for: ', n)
+    for n in ['call', 'put']:
+        for i in ['./figs', './gfigs']:
+            for k in ['vae']:
+                for j in [5, 10, 20]:
+                    if j == 20 and n == 'call':
+                        continue
+                    if (j == 10 or j == 5) and n == 'call' and i == './figs':
+                        continue
+                    print('Running for mskew: ', n, i, k, j)
+                    p = multiprocessing.Process(target=mskew_pred, args=(n, k, j, i))
+                    p.start()
+                    p.join()
 
-    tskew_pred(otype='call', model_name='vae', TSTEPS=20, dd='./figs')
-
-    # for i in ['./gfigs']:
-    #     print('Running for: ', i)
-    #     for k in ['pca']:
-    #         print('Running for: ', k)
-    #         for j in [5, 10, 20]:
-    #             print('Running for: ', j)
-    #             point_pred(model_name=k, TSTEPS=j, dd=i)
-    #     # Do a run for the HAR method
-    #     print('Running for: ', 'har')
-    #     point_pred(model_name='har', TSTEPS=21, dd=i)
-    # Load data
+        # for i in ['./figs', './gfigs']:
+        #     for k in ['vae']:
+        #         for j in [20]:
+        #             print('Running for point: ', n, i, k, j)
+        #             p = multiprocessing.Process(target=point_pred, args=(n, k, j, i))
+        #             p.start()
+        #             p.join()
+        #             # point_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
+        
+        for i in ['./figs', './gfigs']:
+            for k in ['vae']:
+                for j in [5, 10, 20]:
+                    if j == 20:
+                        continue
+                    if (j == 10 or j == 5) and i == './figs' and n == 'call':
+                        continue
+                    print('Running for tskew: ', n, i, k, j)
+                    p = multiprocessing.Process(target=tskew_pred, args=(n, k, j, i))
+                    p.start()
+                    p.join()
+                    # tskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
+  
+        # For HAR 
+        # for i in ['./figs', './gfigs']:
+        #     print('Running for: ', n, i, 'har')
+        #     tskew_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
+        #     mskew_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
+        #     point_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
