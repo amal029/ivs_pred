@@ -19,7 +19,7 @@ from keras.layers import Input, ConvLSTM2D, BatchNormalization, Conv2D
 from keras.models import Model
 from sklearn.metrics import root_mean_squared_error
 from sklearn.metrics import mean_absolute_percentage_error
-from sklearn.metrics import r2_score
+# from sklearn.metrics import r2_score
 # from sklearn.utils.validation import check_array, FLOAT_DTYPES
 from sklearn.utils.validation import check_is_fitted
 import keras
@@ -29,7 +29,8 @@ import matplotlib.pyplot as plt
 # from sklearn.linear_model import SGDRegressor
 from sklearn.cross_decomposition import PLSSVD
 from scipy.stats import norm
-from scipy.optimize import curve_fit
+# from scipy.optimize import curve_fit
+from scipy.stats import ttest_1samp
 
 # XXX: Moneyness Bounds inclusive
 LM = 0.9
@@ -42,6 +43,36 @@ UT = 366
 TSTEP = 5                       # days
 
 DAYS = 365
+
+
+def r2_score_compare(y1, y2):
+    """ytrue: prediction 1: (sample, len(moneyness)*len(termstructure)).
+    This should be one model that you want to compare against.
+
+    y2: prediction 2: (sample, len(moneyness)*len(termstructure)). This
+    is the second model that you want to compare against.
+
+    """
+    ymean = np.mean(y1, axis=0)
+    f = np.sum((y1 - ymean)**2, axis=1)
+    s = np.sum((y1 - y2)**2 - (y2 - ymean)**2, axis=1)
+    v = f - s
+    resg = ttest_1samp(v, 0.0, alternative='greater')
+    resl = ttest_1samp(v, 0.0, alternative='less')
+    return min(resg.pvalue, resl.pvalue)
+
+
+def r2_score(ytrue, ypred):
+    """Own r2score from paper: Are there gains from using information
+    over the surface of implied volatilies?
+
+    """
+    assert (ytrue.shape == ypred.shape)
+    assert (len(ytrue.shape) == 2)
+    num = np.sum((ytrue - ypred)**2, axis=0)
+    mean = np.mean(ytrue, axis=0)
+    den = np.sum((ytrue - mean)**2, axis=0)
+    return 1 - (np.sum(num)/np.sum(den))
 
 
 # XXX: Curve fit to get the average (expected lambda)
@@ -115,6 +146,13 @@ class NS:
         pycoefs = self.reg.predict(xcoefs)
         yp = self._predict(pycoefs)
         return r2_score(y, yp)
+
+    def score_compare(self, vec, y):
+        check_is_fitted(self.reg)
+        xcoefs = self._getcoefs(vec)
+        pycoefs = self.reg.predict(xcoefs)
+        yp = self._predict(pycoefs)
+        return r2_score_compare(y, yp)
 
     def predict(self, vec):
         # XXX: Predit the output given the input
@@ -1032,6 +1070,7 @@ def mskew_pred(otype, dd='./figs', model='mskridge', TSTEPS=5):
 
         reg.fit(mskew, tYY)
         print('train r2score:', reg.score(mskew, tYY))
+        print('train r2score compare p-val:', reg.score_compare(mskew, tYY))
 
         import pickle
         if dd != './gfigs':

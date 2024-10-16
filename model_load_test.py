@@ -6,12 +6,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import glob
 from sklearn.metrics import root_mean_squared_error
-from sklearn.metrics import r2_score
+# from sklearn.metrics import r2_score
 import dmtest
 # from mpl_toolkits.mplot3d import Axes3D
 # import gzip
 import pandas as pd
 import blosc2
+from pred import r2_score
 from pred import MPls
 from scipy import stats
 
