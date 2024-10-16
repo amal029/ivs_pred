@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+import os
+import multiprocessing
 import keras
 import pred
 import numpy as np
@@ -142,12 +144,16 @@ def extract_features(X, t, model, dd, TSTEPS, feature_res, type='mskew', otype='
         else:
             toopen = './%s_feature_models/%s_ts_%s_%s_%s_encoder_gfigs.keras' % (type, model, TSTEPS, t, otype)
 
-        encoder = keras.saving.load_model(toopen) 
+        vae = True
         # Get encoder
         if model == 'autoencoder':
+            encoder = keras.saving.load_model(toopen) 
+            vae = False
             encoder = keras.Model(inputs=encoder.input, outputs=encoder.layers[1].output)
+        else:
+            encoder = keras.saving.load_model(toopen, custom_objects={'VAE': fe.VAE, 'Sampling': fe.Sampling})
 
-        X = fe.autoencoder_transform(X, encoder, TSTEPS=TSTEPS, type=transform_type)
+        X = fe.autoencoder_transform(encoder, X, type=transform_type, vae=vae)
     else:
         X = fe.har_transform(X, TSTEPS=TSTEPS, type=transform_type)
     return X
@@ -631,7 +637,7 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
 def save_results(otype, models, fp, cache):
     # XXX: f = gzip.GzipFile('file.npy.gz', "r"); np.load(f) -- to read
     # XXX: Save all the dates and outputs
-    for dd in ['./figs', './gfigs']:
+    for dd in ['./figs']:
         for t in fp.keys():
             for m in models:
                 ddf = dd.split('/')[1]
@@ -764,19 +770,24 @@ def overall(fname):
 
 
 def model_v_model(otype):
-    TTS = [10, 5]
+    TTS = [20, 10, 5]
     # models = ['ridge', 'lasso',  # 'rf',
     #           'enet',  # 'keras',
     #           'pmridge', 'pmlasso', 'pmenet', 'mskridge',
     #           'msklasso', 'mskenet', 'tskridge', 'tsklasso', 'tskenet']
     models = [
+                'tskridge', 'tskvae', 'tskhar', 
+                'mskridge', 'mskvae', 'mskhar', 
+                'pmridge', 'pmhar'
                 # 'mskhar', 'tskhar', 'pmhar', 'mskridge', 'tskridge', 'pmridge',
-                'tskvae',
-                'mskvae',
-            #   'mskridge', 'mskautoencoder', 'mskpca', 'mskvae', 'mskhar',
-            #   'tskridge', 'tskautoencoder', 'tskpca', 'tskvae', 'mskhar'
-            #   'pmridge', 'pmhar', 'pmautoencoder'
-              ]
+                # 'tskvae','mskvae',
+                # 'pmlasso', 'msklasso', 'tsklasso',
+                # 'pmenet', 'mskenet', 'tskenet',
+                # 'pmpls', 'mskpls', 'tskpls'
+                # 'mskridge', 'mskautoencoder', 'mskpca', 'mskvae', 'mskhar',
+                # 'tskridge', 'tskautoencoder', 'tskpca', 'tskvae', 'mskhar'
+                # 'pmridge', 'pmhar', 'pmautoencoder'
+            ]
     fp = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
                                                              len(models))
           for t in TTS}
@@ -785,10 +796,10 @@ def model_v_model(otype):
           for t in TTS}
 
     cache = {i: {j: {k: None for k in models} for j in TTS}
-             for i in ['./figs', './gfigs']}
+             for i in ['./figs']}
 
 
-    for dd in ['./figs', './gfigs']:
+    for dd in ['./figs']:
         for t in fp.keys():
             for i in range(0, len(models)-1):
                 print('Comparing models with: ', dd, t, models[i])
@@ -836,10 +847,9 @@ def model_v_model(otype):
                             # shave off the last few samples to compare to har 21
                             yk = yk[:-to_remove, :]
                             ypk = ypk[:-to_remove, :]
-                    # assert (np.array_equal(y, yk))
                     # XXX: Now we can do Diebold mariano test
                     try:
-                        dstat, pval = dmtest.dm_test(y, yp, ypk)
+                        dstat, pval = dmtest.dm_test(y, yp, ypk, V1=yk)
                     except dmtest.ZeroVarianceException:
                         dstat, pval = np.nan, np.nan
                     fd[t][i][j] = dstat
@@ -847,9 +857,9 @@ def model_v_model(otype):
         # XXX: Save the results
         header = ','.join(models)
         for t in fp.keys():
-            np.savetxt('pval_%s_%s.csv' % (t, dd.split('/')[1]), fp[t],
+            np.savetxt('pval_%s_%s_%s.csv' % (otype, t, dd.split('/')[1]), fp[t],
                        delimiter=',', header=header)
-            np.savetxt('dstat_%s_%s.csv' % (t, dd.split('/')[1]), fd[t],
+            np.savetxt('dstat_%s_%s_%s.csv' % (otype, t, dd.split('/')[1]), fd[t],
                        delimiter=',', header=header)
 
     # XXX: Save all the results
@@ -949,15 +959,25 @@ def call_overall(otype):
     # XXX: Now plot the overall RMSE, MAPE, and R2 for all models
     # average across all results.
     TTS = [20, 10, 5]
-    lmodels = ['sridge', 'slasso', 'senet', 'spls', 'pmridge', 'pmlasso',
-               'pmenet', 'pmpls', 'mskridge', 'msklasso', 'mskenet', 'mskpls',
-               'tskridge', 'tsklasso', 'tskenet', 'tskpls']
-    models = ['ridge', 'lasso', 'enet', 'pls', 'pmridge', 'pmlasso',
-              'pmenet', 'pmpls', 'mskridge', 'msklasso', 'mskenet', 'mskpls',
-              'tskridge', 'tsklasso', 'tskenet', 'tskpls']
+    lmodels =[ 
+                'tskridge', 'tskvae', 'tskhar', 
+                'mskridge', 'mskvae', 'mskhar', 
+                'pmridge', 'pmhar'
+    ]
+    models = [
+                'tskridge', 'tskvae', 'tskhar', 
+                'mskridge', 'mskvae', 'mskhar', 
+                'pmridge', 'pmhar'
+    ]
+    # lmodels = ['sridge', 'slasso', 'senet', 'spls', 'pmridge', 'pmlasso',
+    #            'pmenet', 'pmpls', 'mskridge', 'msklasso', 'mskenet', 'mskpls',
+    #            'tskridge', 'tsklasso', 'tskenet', 'tskpls']
+    # models = ['ridge', 'lasso', 'enet', 'pls', 'pmridge', 'pmlasso',
+    #           'pmenet', 'pmpls', 'mskridge', 'msklasso', 'mskenet', 'mskpls',
+    #           'tskridge', 'tsklasso', 'tskenet', 'tskpls']
 
     # XXX: Do the overall RMSE, MAPE, and R2
-    for dd in ['figs', 'gfigs']:
+    for dd in ['figs']:
         for ts in TTS:
             rmsemeans = []
             # mapemeans = []
@@ -1144,16 +1164,18 @@ def r2_rmse_score_mt(otype, models=['tskridge', 'pmridge']):
 
 if __name__ == '__main__':
     plt.style.use('seaborn-v0_8-whitegrid')
-
     # XXX: model vs model
-    for otype in ['call', 'put']:
-        model_v_model(otype)
+    # for otype in ['put']:
+    #     model_v_model(otype)
+        # p = multiprocessing.Process(target=model_v_model, args=(otype))
+        # p.start()
+        # p.join()
 
-    # for otype in ['call', 'put']:
+    for otype in ['put']:
     #     # XXX: Plot the bar graph for overall results
-    #     call_overall(otype)
-    #     # XXX: Plot the best time series RMSE and MAPE
-    #     call_timeseries(otype)
+        call_overall(otype)
+        # XXX: Plot the best time series RMSE and MAPE
+        # call_timeseries(otype)
 
     # for otype in ['call', 'put']:
     #     # XXX: DM test across time (RMSE and R2)
