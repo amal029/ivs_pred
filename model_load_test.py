@@ -1074,7 +1074,7 @@ def moneyness_term(fname, m, mi, t, tn, df, df2, y=None, yp=None):
 def r2_rmse_score_mt(otype, models=['tskridge', 'pmridge']):
     assert (len(models) == 2)
     TS = [20, 10, 5]
-    dds = ['figs', 'gfigs']
+    dds = ['figs']
     mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
     # XXX: Now go through the TS
     tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
@@ -1132,18 +1132,32 @@ def r2_rmse_score_mt(otype, models=['tskridge', 'pmridge']):
                     y2, yp2 = moneyness_term(name2, m, mi, t, tn, df3, df4,
                                              y2, yp2)
                     # XXX: Perform Diebold mariano test for yp1 and yp2
-                    assert (np.array_equal(y1, y2))
+                    # assert (np.array_equal(y1, y2))
                     yr = y1[:, m[0]:m[1], t[0]:t[1]]
+                    yr1 = y2[:, m[0]:m[1], t[0]:t[1]]
                     ypr1 = yp1[:, m[0]:m[1], t[0]:t[1]]
                     ypr2 = yp2[:, m[0]:m[1], t[0]:t[1]]
                     yr = yr.reshape(yr.shape[0], yr.shape[1]*yr.shape[2])
+                    yr1 = yr1.reshape(yr1.shape[0], yr1.shape[1]*yr1.shape[2])
                     ypr1 = ypr1.reshape(ypr1.shape[0],
                                         ypr1.shape[1]*ypr1.shape[2])
                     ypr2 = ypr2.reshape(ypr2.shape[0],
                                         ypr2.shape[1]*ypr2.shape[2])
+                    if not np.array_equal(yr, yr1):
+                        to_remove = np.abs(yr.shape[0] - yr1.shape[0])
+                        if len(yr) > len(yr1):
+                            # shave off the last few samples to compare to har 21
+                            yr = yr[:-to_remove, :]
+                            ypr1 = ypr1[:-to_remove, :]
+                        else:
+                            # shave off the last few samples to compare to har 21
+                            yr1 = yr1[:-to_remove, :]
+                            ypr2 = ypr2[:-to_remove, :]
+
                     dstat, pval = dmtest.dm_test(np.transpose(yr),
                                                  np.transpose(ypr1),
-                                                 np.transpose(ypr2))
+                                                 np.transpose(ypr2),
+                                                 V1=np.transpose(yr1))
                     dm[tn][mi] = dstat
                     dmp[tn][mi] = pval
 
@@ -1171,9 +1185,9 @@ if __name__ == '__main__':
         # p.start()
         # p.join()
 
-    for otype in ['put']:
-    #     # XXX: Plot the bar graph for overall results
-        call_overall(otype)
+    # for otype in ['put']:
+    # #     # XXX: Plot the bar graph for overall results
+    #     call_overall(otype)
         # XXX: Plot the best time series RMSE and MAPE
         # call_timeseries(otype)
 
@@ -1182,5 +1196,5 @@ if __name__ == '__main__':
     #     call_dmtest(otype)
 
     # XXX: r2_score for moneyness and term structure
-    # for otype in ['call', 'put']:
-    #     r2_rmse_score_mt(otype)
+    for otype in ['call']:
+        r2_rmse_score_mt(otype, models=['tskridge', 'tskhar'])
