@@ -918,8 +918,10 @@ def linear_fit(otype):
     # command line)
     # XXX: Point regression
     for j in ['./figs', './gfigs']:
-        for k in ['pmpls',
-                  # 'pmridge', 'pmlasso', 'pmenet'
+        for k in [
+            'pmpls',
+                #   'pmridge',
+                    'pmlasso', 'pmenet'
                   ]:
             for i in [5, 10, 20]:
                 print('Doing: %s_%s_%s' % (k, j, i))
@@ -927,8 +929,10 @@ def linear_fit(otype):
 
     # XXX: Moneyness skew regression
     for j in ['./figs', './gfigs']:
-        for k in ['mskpls',
-                  # 'mskridge', 'msklasso', 'mskenet'
+        for k in [
+            'mskpls',
+                #   'mskridge',
+                    'msklasso', 'mskenet'
                   ]:
             for i in [5, 10, 20]:
                 print('Doing: %s_%s_%s' % (k, j, i))
@@ -936,21 +940,23 @@ def linear_fit(otype):
 
     # XXX: Term structure skew regression
     for j in ['./figs', './gfigs']:
-        for k in ['tskpls',
-                  # 'tskridge', 'tsklasso', 'tskenet'
+        for k in [
+            'tskpls',
+                #   'tskridge', 
+                  'tsklasso', 'tskenet'
                   ]:
             for i in [5, 10, 20]:
                 print('Doing: %s_%s_%s' % (k, j, i))
                 tskew_pred(otype, dd=j, model=k, TSTEPS=i)
 
     # XXX: Surface regression
-    for k in ['pls',
-              # 'Ridge', 'Lasso', 'ElasticNet'
-              ]:
-        for j in ['./figs', './gfigs']:
-            for i in [5, 10, 20]:
-                print('Doing: %s_%s_%s' % (k, j, i))
-                regression_predict(otype, model=k, dd=j, TSTEPS=i)
+    # for k in ['pls',
+    #           # 'Ridge', 'Lasso', 'ElasticNet'
+    #           ]:
+    #     for j in ['./figs', './gfigs']:
+    #         for i in [5, 10, 20]:
+    #             print('Doing: %s_%s_%s' % (k, j, i))
+    #             regression_predict(otype, model=k, dd=j, TSTEPS=i)
 
 
 if __name__ == '__main__':
