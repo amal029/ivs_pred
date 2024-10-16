@@ -58,8 +58,7 @@ def r2_score_compare(y1, y2):
     s = np.sum((y1 - y2)**2 - (y2 - ymean)**2, axis=1)
     v = f - s
     resg = ttest_1samp(v, 0.0, alternative='greater')
-    resl = ttest_1samp(v, 0.0, alternative='less')
-    return min(resg.pvalue, resl.pvalue)
+    return resg.pvalue
 
 
 def r2_score(ytrue, ypred):
