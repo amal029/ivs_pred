@@ -20,7 +20,7 @@ from keras.models import Model
 from sklearn.metrics import root_mean_squared_error
 from sklearn.metrics import mean_absolute_percentage_error
 from sklearn.metrics import r2_score
-from sklearn.utils.validation import check_array, FLOAT_DTYPES
+# from sklearn.utils.validation import check_array, FLOAT_DTYPES
 from sklearn.utils.validation import check_is_fitted
 import keras
 # from PIL import Image
@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 # from sklearn.linear_model import SGDRegressor
 from sklearn.cross_decomposition import PLSSVD
 from scipy.stats import norm
+from scipy.optimize import curve_fit
 
 # XXX: Moneyness Bounds inclusive
 LM = 0.9
@@ -43,14 +44,21 @@ TSTEP = 5                       # days
 DAYS = 365
 
 
+# XXX: Curve fit to get the average (expected lambda)
+def ym(m, b0, b1, b2, lam):
+    return (b0 +
+            b1*((1-np.exp(-lam*m))/(lam*m)) +
+            b2*(((1-np.exp(-lam*m))/(lam*m))-np.exp(-lam*m)))
+
+
 # XXX: The class to perform Nelson-Siegel prediction of term structure
-class NST:
+class NS:
     def __init__(self, xdf, TSTEPS, model):
-        if model == 'tsknsridge':
+        if model == 'tsknsridge' or model == 'msknsridge':
             self.reg = Ridge()
-        elif model == 'tsknslasso':
+        elif model == 'tsknslasso' or model == 'msknslasso':
             self.reg = Lasso()
-        elif model == 'tsknsenet':
+        elif model == 'tsknsenet' or model == 'msknsenet':
             self.reg = ElasticNet()
         self.xdf = xdf
         self.TSTEPS = TSTEPS
@@ -974,12 +982,32 @@ def mskew_pred(otype, dd='./figs', model='mskridge', TSTEPS=5):
 
     count = 0
 
+    # XXX: First get the LAMBDA
+    if model == 'msknsridge' or model == 'msknslasso' or model == 'msknsenet':
+        mms = np.arange(LM, UM+MSTEP, MSTEP)
+        LAMBDA = 0.7822641809107665  # obtained from the code below
+        # LAMBDA = [None]*len(tts)
+        # for j in range(len(tts)):
+        #     tYY = tY[:, :, j]
+        #     params = np.array([curve_fit(ym, mms, tYY[k],
+        #                                  p0=[0, 0, 0, 0.0047],
+        #                                  bounds=(-1, 1),
+        #                                  maxfev=100000)[0]
+        #                        for k in range(tYY.shape[0])])
+        #     LAMBDA[j] = np.mean(params, axis=0)[-1]
+        # LAMBDA = np.mean(LAMBDA)
+        x1s = [(1-np.exp(-LAMBDA*i))/(LAMBDA*i) for i in mms]
+        x2s = [i-(np.exp(-LAMBDA*t)) for (i, t) in zip(x1s, mms)]
+        xdf = pd.DataFrame({'x1s': x1s, 'x2s': x2s})
+        print('LAMBDA overall:', LAMBDA)
+
     # XXX: Now we go moneyness skew
     for j, t in enumerate(tts):
         if count % 10 == 0:
             print('Done: ', count)
-            count += 1
-            # XXX: shape = samples, TSTEPS, moneyness, term structure
+
+        count += 1
+        # XXX: shape = samples, TSTEPS, moneyness, term structure
         mskew = tX[:, :, :, j]
         tYY = tY[:, :, j]
         mskew = mskew.reshape(mskew.shape[0], mskew.shape[1]*mskew.shape[2])
@@ -991,18 +1019,20 @@ def mskew_pred(otype, dd='./figs', model='mskridge', TSTEPS=5):
             reg = Ridge(fit_intercept=True, alpha=1)
         elif model == 'msklasso':
             reg = Lasso(fit_intercept=True, alpha=1)
+        elif model == 'mskenet':
+            reg = ElasticNet(fit_intercept=True, alpha=1)
         elif (model == 'mskplslasso' or model == 'mskplsridge' or
               model == 'mskplsenet'):
             tokeep = cca_comps(mskew, tYY)
-            # reg = PLSRegression(n_components=tokeep)
             reg = MPls(tokeep, True, model)
-        else:
-            reg = ElasticNet(fit_intercept=True, alpha=1)
-            reg.fit(mskew, tYY)
-            print(mskew.shape)
-            u = reg.predict(mskew)
-            print(u.shape)
-            # print(reg.score(mskew, tYY))
+        elif (model == 'msknsridge' or model == 'msknslasso' or
+              model == 'msknsenet'):
+            # XXX: Now fit the xdf and call NS
+            reg = NS(xdf, TSTEPS, model)
+
+        reg.fit(mskew, tYY)
+        print('train r2score:', reg.score(mskew, tYY))
+
         import pickle
         if dd != './gfigs':
             with open('./mskew_models/%s_ts_%s_%s_%s.pkl' %
@@ -1040,8 +1070,9 @@ def tskew_pred(otype, dd='./figs', model='tskridge', TSTEPS=5):
     for j, m in enumerate(mms):
         if count % 10 == 0:
             print('Done: ', count)
-            count += 1
-            # XXX: shape = samples, TSTEPS, moneyness, term structure
+        count += 1
+
+        # XXX: shape = samples, TSTEPS, moneyness, term structure
         tskew = tX[:, :, j]
         # tskew1 = np.copy(tskew)  # needed for NS model
         tskew = tskew.reshape(tskew.shape[0], tskew.shape[1]*tskew.shape[2])
@@ -1066,10 +1097,11 @@ def tskew_pred(otype, dd='./figs', model='tskridge', TSTEPS=5):
             # XXX: First we want to get the betas for each day using
             # OLS. Next, we predict the betas for t using t-1,...t-N
             # lags using one of the models.
-            reg = NST(xdf, TSTEPS, model)
+            reg = NS(xdf, TSTEPS, model)
+
         reg.fit(tskew, tYY)
         print(reg.score(tskew, tYY))
-        assert (False)
+
         import pickle
         if dd != './gfigs':
             with open('./tskew_models/%s_ts_%s_%s_%s.pkl' %
@@ -1178,6 +1210,16 @@ def linear_fit(otype):
     # Surface regression prediction (RUN THIS WITH OMP_NUM_THREADS=10 on
     # command line)
 
+    # XXX: Moneyness skew regression
+    for j in ['./figs', './gfigs']:
+        for k in ['msknsridge', 'msknsenet', 'msknslasso',
+                  # 'mskplslasso', 'mskplsridge', 'mskplsenet'
+                  # 'mskridge', 'msklasso', 'mskenet'
+                  ]:
+            for i in [20, 5, 10]:
+                print('Doing: %s_%s_%s' % (k, j, i))
+                mskew_pred(otype, dd=j, model=k, TSTEPS=i)
+
     # XXX: Term structure skew regression
     for j in ['./figs', './gfigs']:
         for k in ['tsknsridge', 'tsknslasso', 'tsknsenet',
@@ -1188,33 +1230,23 @@ def linear_fit(otype):
                 print('Doing: %s_%s_%s' % (k, j, i))
                 tskew_pred(otype, dd=j, model=k, TSTEPS=i)
 
-    # XXX: Moneyness skew regression
-    for j in ['./figs', './gfigs']:
-        for k in ['msknsridge', 'msknslasso', 'msknsenet',
-                  # 'mskplslasso', 'mskplsridge', 'mskplsenet'
-                  # 'mskridge', 'msklasso', 'mskenet'
-                  ]:
-            for i in [5, 10, 20]:
-                print('Doing: %s_%s_%s' % (k, j, i))
-                mskew_pred(otype, dd=j, model=k, TSTEPS=i)
-
     # XXX: Point regression
-    for j in ['./figs', './gfigs']:
-        for k in ['pmplsridge', 'pmplslasso', 'pmplsenet'
-                  # 'pmridge', 'pmlasso', 'pmenet'
-                  ]:
-            for i in [5, 10, 20]:
-                print('Doing: %s_%s_%s' % (k, j, i))
-                point_pred(otype, dd=j, model=k, TSTEPS=i)
+    # for j in ['./figs', './gfigs']:
+    #     for k in ['pmplsridge', 'pmplslasso', 'pmplsenet'
+    #               # 'pmridge', 'pmlasso', 'pmenet'
+    #               ]:
+    #         for i in [5, 10, 20]:
+    #             print('Doing: %s_%s_%s' % (k, j, i))
+    #             point_pred(otype, dd=j, model=k, TSTEPS=i)
 
     # XXX: Surface regression
-    for k in ['plsenet', 'plsridge', 'plslasso'
-              # 'Ridge', 'Lasso', 'ElasticNet'
-              ]:
-        for j in ['./figs', './gfigs']:
-            for i in [5, 10, 20]:
-                print('Doing: %s_%s_%s' % (k, j, i))
-                regression_predict(otype, model=k, dd=j, TSTEPS=i)
+    # for k in ['plsenet', 'plsridge', 'plslasso'
+    #           # 'Ridge', 'Lasso', 'ElasticNet'
+    #           ]:
+    #     for j in ['./figs', './gfigs']:
+    #         for i in [5, 10, 20]:
+    #             print('Doing: %s_%s_%s' % (k, j, i))
+    #             regression_predict(otype, model=k, dd=j, TSTEPS=i)
 
 
 if __name__ == '__main__':
