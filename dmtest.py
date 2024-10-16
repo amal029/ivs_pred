@@ -122,7 +122,8 @@ def dm_test(
     loss=lambda x, y: root_mean_squared_error(x, y, multioutput='raw_values'),
     h: int = 1,
     one_sided: bool = False,
-    harvey_correction: bool = True
+    harvey_correction: bool = True,
+    V1: np.typing.ArrayLike = None
 ) -> Tuple[float, float]:
     r"""Performs the Diebold-Mariano test. The null hypothesis is that
     the two forecasts (`P1`, `P2`) have the same accuracy.
@@ -130,7 +131,10 @@ def dm_test(
     Parameters
     ----------
     V:  Array like
-        The actual timeseries.
+        The actual timeseries for first prediction series.
+    
+    V1: Array like
+        The actual timeseries for second prediction series
 
     P1: Array like
         First prediction series.
@@ -158,7 +162,7 @@ def dm_test(
     statistic, the second is the p-value.
 
     """
-    if not (V.shape == P1.shape == P2.shape):
+    if not (V.shape == P1.shape == P2.shape == V1.shape):
         raise InvalidParameterException(
             "Actual timeseries and prediction series must be of same shape."
         )
@@ -172,7 +176,10 @@ def dm_test(
     # XXX: https://real-statistics.com/time-series-analysis/forecasting-accuracy/diebold-mariano-test/
     n = P1.shape[0]
     l1 = loss(V, P1)
-    l2 = loss(V, P2)
+    if V1 is not None:
+        l2 = loss(V, P2)
+    else:
+        l2 = loss(V1, P2)
     D = l1**2 - l2**2
     mean = float(np.mean(D))
     D = D.tolist()
