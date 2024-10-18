@@ -19,7 +19,7 @@ from keras.layers import Input, ConvLSTM2D, BatchNormalization, Conv2D
 from keras.models import Model
 from sklearn.metrics import root_mean_squared_error
 from sklearn.metrics import mean_absolute_percentage_error
-# from sklearn.metrics import r2_score
+from sklearn.metrics import r2_score
 # from sklearn.utils.validation import check_array, FLOAT_DTYPES
 from sklearn.utils.validation import check_is_fitted
 import keras
@@ -45,33 +45,39 @@ TSTEP = 5                       # days
 DAYS = 365
 
 
-def r2_score_compare(y1, y2):
-    """ytrue: prediction 1: (sample, len(moneyness)*len(termstructure)).
+def cr2_score_pval(ytrue, y1, y2, greater=True):
+    """ytrue: The true series
+    y1: prediction 1: (sample, len(moneyness)*len(termstructure)).
     This should be one model that you want to compare against.
 
     y2: prediction 2: (sample, len(moneyness)*len(termstructure)). This
     is the second model that you want to compare against.
 
     """
-    ymean = np.mean(y1, axis=0)
-    f = np.sum((y1 - ymean)**2, axis=1)
-    s = np.sum((y1 - y2)**2 - (y2 - ymean)**2, axis=1)
+    f = np.sum((ytrue - y1)**2, axis=1)
+    s = np.sum((ytrue - y2)**2 - (y2 - y1)**2, axis=1)
     v = f - s
-    resg = ttest_1samp(v, 0.0, alternative='greater')
+    if greater:
+        resg = ttest_1samp(v, 0.0, alternative='greater')
+    else:
+        resg = ttest_1samp(v, 0.0)
     return resg.pvalue
 
 
-def r2_score(ytrue, ypred):
+def cr2_score(ytrue, y1, y2):
     """Own r2score from paper: Are there gains from using information
     over the surface of implied volatilies?
+    ytrue: true time series
+    y1: prediction from model 1
+    y2  prediction from model 2 (benchmark to compare against)
 
     """
-    assert (ytrue.shape == ypred.shape)
+    assert (ytrue.shape == y1.shape)
+    assert (ytrue.shape == y2.shape)
     assert (len(ytrue.shape) == 2)
-    num = np.sum((ytrue - ypred)**2, axis=0)
-    mean = np.mean(ytrue, axis=0)
-    den = np.sum((ytrue - mean)**2, axis=0)
-    return 1 - (np.sum(num)/np.sum(den))
+    num = np.sum((ytrue - y2)**2)
+    den = np.sum((ytrue - y1)**2)
+    return 1 - (num/den)
 
 
 # XXX: Curve fit to get the average (expected lambda)
@@ -98,23 +104,35 @@ class NS:
         vec = vec.reshape(vec.shape[0], self.TSTEPS,
                           vec.shape[1]//self.TSTEPS)
         # XXX: There are 3 coefficients in the latent NS space
-        xcoefs = np.array([1.0]*vec.shape[0]*vec.shape[1]*3).reshape(
-            vec.shape[0], vec.shape[1], 3
-        )
-        # XXX: For each sample and each lag convert to latent NS space.
-        tot_r2_lreg = 0
-        tot = 0
-        for i in range(vec.shape[0]):
-            # xxcoefs = list()
+        # xcoefs = np.array([0.0]*vec.shape[0]*vec.shape[1]*3).reshape(
+        #     vec.shape[0], vec.shape[1], 3
+        # )
+        # print(vec.shape)
+
+        def ffit(i):
+            res = list()
             for j in range(vec.shape[1]):
                 lreg = LinearRegression(n_jobs=-1).fit(self.xdf, vec[i, j])
-                tot_r2_lreg += lreg.score(self.xdf, vec[i, j])
-                tot += 1
-                xcoefs[i, j] = [lreg.coef_[0], lreg.coef_[1], lreg.intercept_]
+                res += [lreg.coef_[0], lreg.coef_[1], lreg.intercept_]
+            return res
+
+        # XXX: For each sample and each lag convert to latent NS space.
+        from joblib import Parallel, delayed
+        res = Parallel(n_jobs=10)(delayed(ffit)(i)
+                                  for i in range(vec.shape[0]))
+        xcoefs = np.array(res)
+        # for i in range(vec.shape[0]):
+        #     for j in range(vec.shape[1]):
+        #         lreg = LinearRegression(n_jobs=-1).fit(self.xdf, vec[i, j])
+        #         xcoefs[i, j] = [lreg.coef_[0], lreg.coef_[1],
+        #                         lreg.intercept_]
 
         # XXX: Shape the coeffcients correctly
-        xcoefs = xcoefs.reshape(xcoefs.shape[0],
-                                (xcoefs.shape[1] * xcoefs.shape[2]))
+        # xcoefs = xcoefs.reshape(xcoefs.shape[0],
+        #                         (xcoefs.shape[1] * xcoefs.shape[2]))
+        # print(xcoefs.shape)
+        # print('ARE EQUAL? ', np.array_equal(vcoefs, xcoefs))
+        # # assert (False)
 
         if y is not None:
             ycoefs = np.array([1.0]*y.shape[0]*3).reshape(y.shape[0], 3)
@@ -146,18 +164,11 @@ class NS:
         yp = self._predict(pycoefs)
         return r2_score(y, yp)
 
-    def score_compare(self, vec, y):
-        check_is_fitted(self.reg)
-        xcoefs = self._getcoefs(vec)
-        pycoefs = self.reg.predict(xcoefs)
-        yp = self._predict(pycoefs)
-        return r2_score_compare(y, yp)
-
     def predict(self, vec):
         # XXX: Predit the output given the input
         xcoefs = self._getcoefs(vec)
         pycoefs = self.reg.predict(xcoefs)
-        return self._predict(vec, pycoefs)
+        return self._predict(pycoefs)
 
 
 # XXX: The class to perform pls based regression
