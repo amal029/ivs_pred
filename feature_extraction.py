@@ -264,12 +264,12 @@ def har_transform(tX, TSTEPS=21, type='skew'):
 
     return tX 
 
-def extract_features(tX, tY, model_name='pca', TSTEPS=21, type='skew', dd='./figs', otype='call', m=0, save=True):
+def extract_features(tX, tY, model_name='pca', TSTEPS=21, type='tskew', dd='./figs', otype='call', m=0, save=True):
     """
     Extracts features from the given data
     """
     if model_name == 'har':
-        if type=='skew':
+        if type[1:] =='skew' or type == 'surf':
             # Reshape to 3D
             tX = tX.reshape(tX.shape[0], TSTEPS, tX.shape[1]//TSTEPS)
 
@@ -277,7 +277,7 @@ def extract_features(tX, tY, model_name='pca', TSTEPS=21, type='skew', dd='./fig
     elif model_name == 'autoencoder':
         encoding_dim = TSTEPS//2 
 
-        if type == 'skew':
+        if type[1:] == 'skew' or type == 'surf':
             num_points = tX.shape[1]//TSTEPS
             encoding_dim = encoding_dim*num_points
 
@@ -289,16 +289,16 @@ def extract_features(tX, tY, model_name='pca', TSTEPS=21, type='skew', dd='./fig
         # Save encoder model
         if save:
             if dd != './gfigs':
-                encoder.save('./tskew_feature_models/%s_ts_%s_%s_%s_encoder.keras' % (model_name, TSTEPS, m, otype))
+                encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_encoder.keras' % (type, model_name, TSTEPS, m, otype))
             else:
-                encoder.save('./tskew_feature_models/%s_ts_%s_%s_%s_encoder_gfigs.keras' % (model_name, TSTEPS, m, otype))
+                encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_encoder_gfigs.keras' % (type, model_name, TSTEPS, m, otype))
 
         return tX, encoder
         
     elif model_name == 'vae':
         encoding_dim = TSTEPS//2
 
-        if type == 'skew':
+        if type[1:] == 'skew' or type == 'surf':
             num_points = tX.shape[1]//TSTEPS
             latent_dim = encoding_dim*num_points
             intermediate_dim = (encoding_dim+1)*num_points
@@ -314,9 +314,9 @@ def extract_features(tX, tY, model_name='pca', TSTEPS=21, type='skew', dd='./fig
         # Save encoder model
         if save:
             if dd != './gfigs':
-                vae_encoder.save('./tskew_feature_models/%s_ts_%s_%s_%s_encoder.keras' % (model_name, TSTEPS, m, otype))
+                vae_encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_encoder.keras' % (type, model_name, TSTEPS, m, otype))
             else:
-                vae_encoder.save('./tskew_feature_models/%s_ts_%s_%s_%s_encoder_gfigs.keras' % (model_name, TSTEPS, m, otype))
+                vae_encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_encoder_gfigs.keras' % (type, model_name, TSTEPS, m, otype))
         
         return tX, vae_encoder
 
@@ -338,6 +338,42 @@ def validation(vX, vY, model):
     print('MAPE: ', mape)
     print('R2: ', r2)
     return rmse, mape, r2
+
+def surf_pred(data, otype, model_name, TSTEPS, dd):
+    if not os.path.exists('./surf_feature_models'):
+        os.makedirs('./surf_feature_models')
+
+    tX, tY, vX, vY, _ = data
+    # removing extra dimension
+    tX = tX.reshape(tX.shape[:-1])
+    vX = vX.reshape(vX.shape[:-1])
+
+    if dd == './gfigs':
+        tX, tY = pred.clean_data(tX, tY)
+        vX, vY = pred.clean_data(vX, vY)
+    
+    # Flatten the time step term structure and moneyness
+    tX = tX.reshape(tX.shape[0], tX.shape[1]*tX.shape[2]*tX.shape[3])
+    tY = tY.reshape(tY.shape[0], tY.shape[1]*tY.shape[2])
+
+    if model_name == 'har' and TSTEPS != 21:
+        return
+    
+    tX = extract_features(tX, tY, model_name=model_name, TSTEPS=TSTEPS, type='surf', dd=dd, otype=otype)
+
+    # Fit Regression model
+    model = Ridge()
+    model.fit(tX, tY)
+
+    # Validate the model
+    validation(tX, tY, model)
+
+    if dd != './gfigs':
+        with open('./surf_feature_models/%s_ts_%s_%s.pkl' % (model_name, TSTEPS, otype), 'wb') as f:
+            pickle.dump(model, f)
+    else:
+        with open('./surf_feature_models/%s_ts_%s_%s_gfigs.pkl' % (model_name, TSTEPS, otype), 'wb') as f:
+            pickle.dump(model, f)
 
 def tskew_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs'):
     # Check if directory exists
@@ -373,7 +409,7 @@ def tskew_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs'):
             continue 
 
         # Extract features
-        tskew = extract_features(tskew, tYY, model_name=model_name, TSTEPS=TSTEPS, type='skew', dd=dd, otype=otype, m=m)
+        tskew = extract_features(tskew, tYY, model_name=model_name, TSTEPS=TSTEPS, type='tskew', dd=dd, otype=otype, m=m)
 
         # XXX: Add m to the sample set
         ms = np.array([m]*tskew.shape[0]).reshape(tskew.shape[0], 1)
@@ -423,7 +459,7 @@ def mskew_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs'):
         tYY = tY[:, :, j]
         mskew = mskew.reshape(mskew.shape[0], mskew.shape[1]*mskew.shape[2])
 
-        mskew, encoder = extract_features(mskew, tYY, model_name=model_name, TSTEPS=TSTEPS, type='skew', dd=dd, otype=otype, m=t, save=False)
+        mskew, encoder = extract_features(mskew, tYY, model_name=model_name, TSTEPS=TSTEPS, type='mskew', dd=dd, otype=otype, m=t, save=False)
         
         # XXX: Add t to the sample set
         ts = np.array([t]*mskew.shape[0]).reshape(mskew.shape[0], 1)
