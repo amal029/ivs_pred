@@ -118,7 +118,7 @@ class NS:
 
         # XXX: For each sample and each lag convert to latent NS space.
         from joblib import Parallel, delayed
-        res = Parallel(n_jobs=10)(delayed(ffit)(i)
+        res = Parallel(n_jobs=-1)(delayed(ffit)(i)
                                   for i in range(vec.shape[0]))
         xcoefs = np.array(res)
         # for i in range(vec.shape[0]):
@@ -247,7 +247,8 @@ class MPls:
     def score(self, tX, tY):
         tXX = self._reg_svd.transform(tX)
         vYY = self._reg.predict(tXX)
-        vY = vYY @ self._reg_svd.y_weights_.T * self.ystd + self.ymean
+        vYY = vYY.reshape(vYY.shape[0], self._reg_svd.y_weights_.T.shape[0])
+        vY = np.dot(vYY, self._reg_svd.y_weights_.T) * self.ystd + self.ymean
         return r2_score(tY, vY)
 
 
@@ -1047,7 +1048,7 @@ def mskew_pred(otype, dd='./figs', model='mskridge', TSTEPS=5):
         x1s = [(1-np.exp(-LAMBDA*i))/(LAMBDA*i) for i in mms]
         x2s = [i-(np.exp(-LAMBDA*t)) for (i, t) in zip(x1s, mms)]
         xdf = pd.DataFrame({'x1s': x1s, 'x2s': x2s})
-        print('LAMBDA overall:', LAMBDA)
+        # print('LAMBDA overall:', LAMBDA)
 
     # XXX: Now we go moneyness skew
     for j, t in enumerate(tts):
@@ -1079,8 +1080,7 @@ def mskew_pred(otype, dd='./figs', model='mskridge', TSTEPS=5):
             reg = NS(xdf, TSTEPS, model)
 
         reg.fit(mskew, tYY)
-        print('train r2score:', reg.score(mskew, tYY))
-        print('train r2score compare p-val:', reg.score_compare(mskew, tYY))
+        # print('train r2score:', reg.score(mskew, tYY))
 
         import pickle
         if dd != './gfigs':
@@ -1149,7 +1149,7 @@ def tskew_pred(otype, dd='./figs', model='tskridge', TSTEPS=5):
             reg = NS(xdf, TSTEPS, model)
 
         reg.fit(tskew, tYY)
-        print(reg.score(tskew, tYY))
+        # print(reg.score(tskew, tYY))
 
         import pickle
         if dd != './gfigs':
@@ -1261,41 +1261,32 @@ def linear_fit(otype):
 
     # XXX: Moneyness skew regression
     for j in ['./figs', './gfigs']:
-        for k in ['msknsridge', 'msknsenet', 'msknslasso',
-                  # 'mskplslasso', 'mskplsridge', 'mskplsenet'
-                  # 'mskridge', 'msklasso', 'mskenet'
-                  ]:
-            for i in [20, 5, 10]:
-                print('Doing: %s_%s_%s' % (k, j, i))
-                mskew_pred(otype, dd=j, model=k, TSTEPS=i)
-
-    # XXX: Term structure skew regression
-    for j in ['./figs', './gfigs']:
-        for k in ['tsknsridge', 'tsknslasso', 'tsknsenet',
-                  # 'tskplsridge', 'tskplslasso', 'tskplsenet'
-                  # 'tskridge', 'tsklasso', 'tskenet'
-                  ]:
-            for i in [20, 5, 10]:
+        for i in [20, 5, 10]:
+            for k in ['tsknsridge', 'tsknslasso', 'tsknsenet',
+                      'tskplsridge', 'tskplslasso', 'tskplsenet',
+                      'tskridge', 'tsklasso', 'tskenet'
+                      ]:
                 print('Doing: %s_%s_%s' % (k, j, i))
                 tskew_pred(otype, dd=j, model=k, TSTEPS=i)
 
-    # XXX: Point regression
-    # for j in ['./figs', './gfigs']:
-    #     for k in ['pmplsridge', 'pmplslasso', 'pmplsenet'
-    #               # 'pmridge', 'pmlasso', 'pmenet'
-    #               ]:
-    #         for i in [5, 10, 20]:
-    #             print('Doing: %s_%s_%s' % (k, j, i))
-    #             point_pred(otype, dd=j, model=k, TSTEPS=i)
+            for k in ['pmplsridge', 'pmplslasso', 'pmplsenet',
+                      'pmridge', 'pmlasso', 'pmenet'
+                      ]:
+                print('Doing: %s_%s_%s' % (k, j, i))
+                point_pred(otype, dd=j, model=k, TSTEPS=i)
 
-    # XXX: Surface regression
-    # for k in ['plsenet', 'plsridge', 'plslasso'
-    #           # 'Ridge', 'Lasso', 'ElasticNet'
-    #           ]:
-    #     for j in ['./figs', './gfigs']:
-    #         for i in [5, 10, 20]:
-    #             print('Doing: %s_%s_%s' % (k, j, i))
-    #             regression_predict(otype, model=k, dd=j, TSTEPS=i)
+            for k in ['plsenet', 'plsridge', 'plslasso',
+                      'Ridge', 'Lasso', 'ElasticNet'
+                      ]:
+                print('Doing: %s_%s_%s' % (k, j, i))
+                regression_predict(otype, model=k, dd=j, TSTEPS=i)
+
+            for k in ['mskplslasso', 'msknsridge', 'msknsenet', 'msknslasso',
+                      'mskplsridge', 'mskplsenet',
+                      'mskridge', 'msklasso', 'mskenet'
+                      ]:
+                print('Doing: %s_%s_%s' % (k, j, i))
+                mskew_pred(otype, dd=j, model=k, TSTEPS=i)
 
 
 if __name__ == '__main__':
