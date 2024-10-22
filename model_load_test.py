@@ -1032,25 +1032,25 @@ if __name__ == '__main__':
     plt.style.use('seaborn-v0_8-whitegrid')
 
     # XXX: model vs model
-    # for otype in ['call', 'put']:
-    #     model_v_model(otype)
+    for otype in ['call', 'put']:
+        model_v_model(otype)
 
-    # for otype in ['call', 'put']:
-    #     # XXX: Plot the bar graph for overall results
-    #     call_overall(otype)
-    #     # XXX: Plot the best time series RMSE and MAPE
-    #     call_timeseries(otype)
+    for otype in ['call', 'put']:
+        # XXX: Plot the bar graph for overall results
+        call_overall(otype)
+        # XXX: Plot the best time series RMSE and MAPE
+        call_timeseries(otype)
 
-    # for otype in ['call', 'put']:
-    #     # XXX: DM test across time (RMSE)
-    #     call_dmtest(otype)
+    for otype in ['call', 'put']:
+        # XXX: DM test across time (RMSE)
+        call_dmtest(otype)
 
     # XXX: r2_score for moneyness and term structure
-    # for otype in ['call', 'put']:
-    #     r2_rmse_score_mt(otype)
+    for otype in ['call', 'put']:
+        r2_rmse_score_mt(otype)
 
-    # for otype in ['call', 'put']:
-    #     direction(otype)
+    for otype in ['call', 'put']:
+        direction(otype)
 
     # XXX: This test compares different lag lengths for the same model,
     # usually there is literally no difference.
