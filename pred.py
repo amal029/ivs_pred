@@ -103,12 +103,8 @@ class NS:
         vec = vec[:, :-1]
         vec = vec.reshape(vec.shape[0], self.TSTEPS,
                           vec.shape[1]//self.TSTEPS)
-        # XXX: There are 3 coefficients in the latent NS space
-        # xcoefs = np.array([0.0]*vec.shape[0]*vec.shape[1]*3).reshape(
-        #     vec.shape[0], vec.shape[1], 3
-        # )
-        # print(vec.shape)
 
+        # XXX: There are 3 coefficients in the latent NS space
         def ffit(i):
             res = list()
             for j in range(vec.shape[1]):
@@ -121,19 +117,6 @@ class NS:
         res = Parallel(n_jobs=-1)(delayed(ffit)(i)
                                   for i in range(vec.shape[0]))
         xcoefs = np.array(res)
-        # for i in range(vec.shape[0]):
-        #     for j in range(vec.shape[1]):
-        #         lreg = LinearRegression(n_jobs=-1).fit(self.xdf, vec[i, j])
-        #         xcoefs[i, j] = [lreg.coef_[0], lreg.coef_[1],
-        #                         lreg.intercept_]
-
-        # XXX: Shape the coeffcients correctly
-        # xcoefs = xcoefs.reshape(xcoefs.shape[0],
-        #                         (xcoefs.shape[1] * xcoefs.shape[2]))
-        # print(xcoefs.shape)
-        # print('ARE EQUAL? ', np.array_equal(vcoefs, xcoefs))
-        # # assert (False)
-
         if y is not None:
             ycoefs = np.array([1.0]*y.shape[0]*3).reshape(y.shape[0], 3)
             # XXX: Get the betas for the output too!
@@ -250,6 +233,103 @@ class MPls:
         vYY = vYY.reshape(vYY.shape[0], self._reg_svd.y_weights_.T.shape[0])
         vY = np.dot(vYY, self._reg_svd.y_weights_.T) * self.ystd + self.ymean
         return r2_score(tY, vY)
+
+
+# XXX: Chalamandaris and Tsekrekos (2015) model
+class CT:
+    def __init__(self, model, mms, TTS, TSTEPS, LAMBDA=0.0147):
+        self.TSTEPS = TSTEPS
+        self.MMS = len(mms)
+        self.TTS = len(TTS)
+        # XXX: Make the data frame for fitting
+        self.df = pd.DataFrame({'m': np.array([[m]*len(TTS)
+                                               for m in mms]).reshape(
+                                                       len(mms)*len(TTS)),
+                                't': np.array(TTS*len(mms))})
+        self.df['mlt1'] = (self.df['m'] < 1.0).astype(int, copy=False)
+        self.df['mgeq1'] = (self.df['m'] >= 1.0).astype(int, copy=False)
+        self.df['m2'] = self.df['m']**2
+        self.df['mt'] = self.df['m']*self.df['t']
+        # XXX: The required model values
+        self.df['b0'] = 1
+        self.df['b1'] = self.df['m2']*self.df['mgeq1']
+        self.df['b2'] = self.df['m2']*self.df['mlt1']
+        texp = (self.df['t']*-LAMBDA).apply(np.exp)
+        lt = self.df['t']*LAMBDA
+        self.df['b3'] = (1 - texp)/lt
+        self.df['b4'] = self.df['b3'] - texp
+        self.df['b5'] = self.df['mgeq1']*self.df['mt']
+        self.df['b6'] = self.df['mlt1']*self.df['mt']
+
+        if model == 'CTridge':
+            self.reg = Ridge()
+        elif model == 'CTlasso':
+            self.reg = Lasso()
+        elif model == 'CTenet':
+            self.reg = ElasticNet()
+
+    def fitX(self, X, features):
+        # XXX: Do this TSTEPS time
+        res = list()
+        for i in range(X.shape[0]):
+            lreg = LinearRegression(n_jobs=-1,
+                                    fit_intercept=False).fit(features,
+                                                             X[i])
+            res.append(lreg.coef_)
+        return np.array(res)
+
+    def fitY(self, Y, features):
+        lreg = LinearRegression(n_jobs=-1,
+                                fit_intercept=False).fit(features, Y)
+        return lreg.coef_
+
+    def fit(self, tX, tY):
+        tX = tX.reshape(tX.shape[0], self.TSTEPS, self.MMS*self.TTS)
+        tY = tY.reshape(tX.shape[0], self.MMS*self.TTS)
+        features = self.df[['b0', 'b1', 'b2', 'b3', 'b4', 'b5', 'b6']]
+        from joblib import Parallel, delayed
+        resY = np.array(Parallel(n_jobs=-1)(delayed(self.fitY)(tY[i], features)
+                                            for i in range(tY.shape[0])))
+        # XXX: Fit the X
+        resX = np.array(Parallel(n_jobs=-1)(delayed(self.fitX)(tX[i], features)
+                                            for i in range(tX.shape[0])))
+        resX = resX.reshape(resX.shape[0], resX.shape[1]*resX.shape[2])
+
+        # XXX: Now fit the coefficients learning model
+        self.reg.fit(resX, resY)
+        return self
+
+    def score(self, tX, tY):
+        check_is_fitted(self.reg)
+        tX = tX.reshape(tX.shape[0], self.TSTEPS, self.MMS*self.TTS)
+        tY = tY.reshape(tX.shape[0], self.MMS*self.TTS)
+        features = self.df[['b0', 'b1', 'b2', 'b3', 'b4', 'b5', 'b6']]
+        from joblib import Parallel, delayed
+        # XXX: Fit the X
+        resX = np.array(Parallel(n_jobs=-1)(delayed(self.fitX)(tX[i], features)
+                                            for i in range(tX.shape[0])))
+        resX = resX.reshape(resX.shape[0], resX.shape[1]*resX.shape[2])
+        # XXX: Predict the next day' coefficients
+        presY = self.reg.predict(resX)
+        # XXX: do a dot product to get the pY
+        pY = np.dot(presY, features.T)
+        return r2_score(tY, pY)
+
+    def predict(self, tX):
+        check_is_fitted(self.reg)
+        tX = tX.reshape(tX.shape[0], self.TSTEPS, self.MMS*self.TTS)
+        pass
+        features = self.df[['b0', 'b1', 'b2', 'b3', 'b4', 'b5', 'b6']]
+        from joblib import Parallel, delayed
+        # XXX: Fit the X
+        resX = np.array(Parallel(n_jobs=-1)(delayed(self.fitX)(tX[i], features)
+                                            for i in range(tX.shape[0])))
+        resX = resX.reshape(resX.shape[0], resX.shape[1]*resX.shape[2])
+        # XXX: Predict the next day' coefficients
+        presY = self.reg.predict(resX)
+        # XXX: do a dot product to get the pY
+        pY = np.dot(presY, features.T)
+        return pY
 
 
 def getr(row, mk):
@@ -933,6 +1013,12 @@ def regression_predict(otype, dd='./figs', model='Ridge', TSTEPS=10):
         treg = model
         reg = MPls(tokeep, intercept, model)
 
+    if model == 'CTridge' or model == 'CTlasso' or model == 'CTenet':
+        mms = np.arange(LM, UM+MSTEP, MSTEP)
+        TTS = [i for i in range(LT, UT+TSTEP, TSTEP)]
+        reg = CT(model, mms, TTS, TSTEPS)
+        treg = model
+
     reg.fit(tX, tY)
     print('Train set R2: ', reg.score(tX, tY))
 
@@ -1261,32 +1347,33 @@ def linear_fit(otype):
 
     # XXX: Moneyness skew regression
     for j in ['./figs', './gfigs']:
-        for i in [20, 5, 10]:
-            for k in ['tsknsridge', 'tsknslasso', 'tsknsenet',
-                      'tskplsridge', 'tskplslasso', 'tskplsenet',
-                      'tskridge', 'tsklasso', 'tskenet'
-                      ]:
-                print('Doing: %s_%s_%s' % (k, j, i))
-                tskew_pred(otype, dd=j, model=k, TSTEPS=i)
-
-            for k in ['pmplsridge', 'pmplslasso', 'pmplsenet',
-                      'pmridge', 'pmlasso', 'pmenet'
-                      ]:
-                print('Doing: %s_%s_%s' % (k, j, i))
-                point_pred(otype, dd=j, model=k, TSTEPS=i)
-
-            for k in ['plsenet', 'plsridge', 'plslasso',
-                      'Ridge', 'Lasso', 'ElasticNet'
+        for i in [5, 20, 10]:
+            for k in ['CTridge', 'CTlasso', 'CTenet',
+                      # 'plsenet', 'plsridge', 'plslasso',
+                      # 'Ridge', 'Lasso', 'ElasticNet'
                       ]:
                 print('Doing: %s_%s_%s' % (k, j, i))
                 regression_predict(otype, model=k, dd=j, TSTEPS=i)
 
-            for k in ['mskplslasso', 'msknsridge', 'msknsenet', 'msknslasso',
-                      'mskplsridge', 'mskplsenet',
-                      'mskridge', 'msklasso', 'mskenet'
-                      ]:
-                print('Doing: %s_%s_%s' % (k, j, i))
-                mskew_pred(otype, dd=j, model=k, TSTEPS=i)
+            # for k in ['tsknsridge', 'tsknslasso', 'tsknsenet',
+            #           'tskplsridge', 'tskplslasso', 'tskplsenet',
+            #           'tskridge', 'tsklasso', 'tskenet'
+            #           ]:
+            #     print('Doing: %s_%s_%s' % (k, j, i))
+            #     tskew_pred(otype, dd=j, model=k, TSTEPS=i)
+
+            # for k in ['pmplsridge', 'pmplslasso', 'pmplsenet',
+            #           'pmridge', 'pmlasso', 'pmenet'
+            #           ]:
+            #     print('Doing: %s_%s_%s' % (k, j, i))
+            #     point_pred(otype, dd=j, model=k, TSTEPS=i)
+
+            # for k in ['mskplslasso', 'msknsridge', 'msknsenet', 'msknslasso',
+            #           'mskplsridge', 'mskplsenet',
+            #           'mskridge', 'msklasso', 'mskenet'
+            #           ]:
+            #     print('Doing: %s_%s_%s' % (k, j, i))
+            #     mskew_pred(otype, dd=j, model=k, TSTEPS=i)
 
 
 if __name__ == '__main__':
