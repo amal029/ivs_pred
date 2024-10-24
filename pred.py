@@ -337,22 +337,23 @@ class CT:
 # stochastic volatility inspired (SSVI) by Gatheral 2013.
 class SSVI:
     # SSVI
-    def SSVI(self, theta, T, rho, gamma):
+    def SSVI(self, theta, T, rho, nu):
         # XXX: Heston style fit
-        phi = 1/(gamma*theta)*(1-(1-np.exp(-gamma*theta))/(gamma*theta))
+        # phi = 1/(gamma*theta)*(1-(1-np.exp(-gamma*theta))/(gamma*theta))
+        phi = nu / (theta**0.5)  # power law
         result = (0.5 * theta) * (1 + rho * phi * self.k +
                                   np.sqrt((phi * self.k + rho)**2 +
                                           1 - rho**2))
         return np.sqrt(result/T)
 
     # no arbitrage condtion
-    def Heston_condition(self, params):
-        rho, gamma = params
-        return gamma - 0.25*(1.+np.abs(rho))
+    # def Heston_condition(self, params):
+    #     rho, gamma = params
+    #     return gamma - 0.25*(1.+np.abs(rho))
 
     def __init__(self, model, TSTEPS):
-        self.bnds = [(-1, 1), (0+1e-6, np.inf)]
-        self.cons2 = [{'type': 'ineq', 'fun': self.Heston_condition}]
+        self.bnds = [(-1+1e-6, 1-1e-6), (0+1e-6, np.inf)]
+        # self.cons2 = [{'type': 'ineq', 'fun': self.Heston_condition}]
         self.mms = np.arange(LM, UM+MSTEP, MSTEP)
         self.tts = np.array([i/365 for i in range(LT, UT+TSTEP, TSTEP)])
         self.k = np.log(self.mms)         # log moneyness
@@ -374,13 +375,13 @@ class SSVI:
 
     # XXX: Fit for a given Day
     def fitADay(self, params, Y):
-        rho, gamma = params
+        rho, nu = params
         THETAS = Y[self.atmi]**2*self.tts
         pY = list()
         # XXX: Go slice by slice
         for ti, T in enumerate(self.tts):
             theta = THETAS[ti]
-            pY.append(self.SSVI(theta, T, rho, gamma))
+            pY.append(self.SSVI(theta, T, rho, nu))
         # XXX: Now do a transpose of res
         pY = np.array(pY).T
         # XXX: Now do a sum of square differences
@@ -388,13 +389,13 @@ class SSVI:
 
     def fitY(self, tY):
         from joblib import Parallel, delayed
-        res = Parallel(n_jobs=-1)(delayed(minimize)(self.fitADay,
-                                                    x0=[0.4, 0.1],
-                                                    args=(tY[i]),
-                                                    bounds=self.bnds,
-                                                    constraints=self.cons2,
-                                                    options={'disp': False})
-                                  for i in range(tY.shape[0]))
+        res = Parallel(n_jobs=-1)(
+            delayed(minimize)(self.fitADay,
+                              x0=[0.4, 0.1],
+                              args=(tY[i]),
+                              bounds=self.bnds,
+                              options={'disp': False})
+            for i in range(tY.shape[0]))
 
         # XXX: Add the target THETAS for prediciting the ATM IV
         tthetas = list()
@@ -411,7 +412,6 @@ class SSVI:
             for d in D:
                 m = minimize(self.fitADay, x0=[0.4, 0.1], args=(d),
                              bounds=self.bnds,
-                             constraints=self.cons2,
                              options={'disp': False})
                 m = [m.x[0], m.x[1]]
                 res.append(m)
@@ -441,6 +441,10 @@ class SSVI:
         # XXX: Fit the targets
         targets, tthetas = self.fitY(tY)
 
+        # from statsmodels.graphics.tsaplots import plot_pacf
+        # plot_pacf(features[:, 0])
+        # plt.show()
+
         # XXX: Fit the model -- this score is very low!
         self.reg = self.reg.fit(features, targets)
         # print('reg score: ', self.reg.score(features, targets))
@@ -458,12 +462,12 @@ class SSVI:
     def predict(self, tX):
 
         def __predict(params, THETAS):
-            rho, gamma = params[0], params[1]
+            rho, nu = params[0], params[1]
             THETAS = THETAS**2*self.tts
             pY = list()
             for ti, T in enumerate(self.tts):
                 theta = THETAS[ti]
-                pY.append(self.SSVI(theta, T, rho, gamma))
+                pY.append(self.SSVI(theta, T, rho, nu))
             pY = np.array(pY).T
             return pY
 
@@ -478,8 +482,9 @@ class SSVI:
                                                         (fthetas.shape[1] *
                                                          fthetas.shape[2])))
         from joblib import Parallel, delayed
-        pY = Parallel(n_jobs=-1)(delayed(__predict)(pftargets[i], pttargets[i])
-                                 for i in range(pttargets.shape[0]))
+        pY = Parallel(n_jobs=-1)(
+            delayed(__predict)(pftargets[i], pttargets[i])
+            for i in range(pttargets.shape[0]))
         pY = np.array(pY)
         pY = pY.reshape(pY.shape[0], pY.shape[1]*pY.shape[2])
         return pY
@@ -1506,7 +1511,7 @@ def linear_fit(otype):
     for j in ['./figs', './gfigs']:
         for i in [5, 20, 10]:
             for k in ['ssviridge', 'ssvilasso', 'ssvienet',
-                      'ctridge', 'ctlasso', 'ctenet',
+                      # 'ctridge', 'ctlasso', 'ctenet',
                       # 'plsenet', 'plsridge', 'plslasso',
                       # 'Ridge', 'Lasso', 'ElasticNet'
                       ]:
