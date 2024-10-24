@@ -567,11 +567,13 @@ def overall(fname):
 def model_v_model(otype):
     TTS = [5, 20, 10]
     models = [
+        r'ctridge', r'ctlasso', r'ctenet',
+        r'ssviridge', r'ssvilasso', r'ssvienet',
         'msknsridge', 'mskenet', 'msknslasso', 'msknsenet',
         'tsknsridge', 'tsknslasso', 'tsknsenet',
         'mskplslasso', 'mskplsridge', 'mskplsenet',
-        'msklasso', 'ridge', 'lasso',  # 'rf',
-        'enet', 'plsridge', 'plslasso', 'plsenet',  # 'keras',
+        'msklasso', 'ridge', 'lasso',
+        'enet', 'plsridge', 'plslasso', 'plsenet',
         'pmridge', 'pmlasso', 'pmenet', 'pmplsridge',
         'pmplslasso', 'pmplsenet',
         'mskridge', 'tskridge',
@@ -581,19 +583,21 @@ def model_v_model(otype):
                                                              len(models))
           for t in TTS}
 
-    cache = {i: {j: {k: None for k in models} for j in TTS}
-             for i in ['./figs', './gfigs']}
-
     for dd in ['./figs', './gfigs']:
         for t in fp.keys():
             for i in range(len(models)):
-                cache[dd][t][models[i]] = main(otype, plot=False, TSTEPS=t,
-                                               model=models[i],
-                                               get_features=False,
-                                               dd=dd)
-    # XXX: Save all the results
-    print('Saving results')
-    save_results(otype, models, fp, cache)
+                dates, y, o = main(otype, plot=False, TSTEPS=t,
+                                   model=models[i],
+                                   get_features=False,
+                                   dd=dd)
+                # XXX: Save all the results
+                tosave = './final_results/%s_%s_ts_%s_model_%s.npy.gz' % (
+                    otype, dd.split('/')[1], t, models[i])
+                print('Saving result: %s' % tosave)
+                dates = dates.reshape(y.shape[0], 1)
+                res = np.append(dates, y, axis=1)
+                res = np.append(res, o, axis=1)
+                blosc2.save_array(res, tosave, mode='w')
 
 
 def call_dmtest(otype):
@@ -602,6 +606,8 @@ def call_dmtest(otype):
               'pmlasso', 'pmenet', 'pmplsridge', 'pmplslasso',
               'pmplsenet', 'msklasso', 'mskenet', 'mskplsridge', 'mskplslasso',
               'mskplsenet', 'msknsridge', 'msknslasso', 'msknsenet',
+              'CTridge', 'CTlasso', 'CTenet', 'SSVIridge',
+              'SSVIlasso', 'SSVIenet',
               'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
               'tskplsenet', 'tsknsridge', 'tsknslasso', 'tsknsenet',
               'ridge', 'mskridge', 'pmridge', 'tskridge']
@@ -711,7 +717,9 @@ def call_overall(otype):
     # XXX: Now plot the overall RMSE, MAPE, and R2 for all models
     # average across all results.
     TTS = [20, 10, 5]
-    lmodels = ['sridge', 'slasso', 'senet',
+    lmodels = ['CTridge', 'CTlasso', 'CTenet',
+               'SSVIridge', 'SSVIlasso', 'SSVIenet',
+               'sridge', 'slasso', 'senet',
                'splsridge', 'splslasso', 'splsenet',
                'pmridge', 'pmlasso',
                'pmenet', 'pmplsridge', 'pmplslasso', 'pmplsenet',
@@ -719,7 +727,9 @@ def call_overall(otype):
                'mskplsenet', 'msknsridge', 'msknslasso', 'msknsenet',
                'tskridge', 'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
                'tskplsenet', 'tsknsridge', 'tsknslasso', 'tsknsenet']
-    models = ['ridge', 'lasso', 'enet', 'plsridge', 'plslasso', 'plsenet',
+    models = ['CTridge', 'CTlasso', 'CTenet',
+              'SSVIridge', 'SSVIlasso', 'SSVIenet',
+              'ridge', 'lasso', 'enet', 'plsridge', 'plslasso', 'plsenet',
               'pmridge', 'pmlasso',
               'pmenet', 'pmplsridge', 'pmplslasso', 'pmplsenet',
               'mskridge', 'msklasso', 'mskenet', 'mskplsridge', 'mskplslasso',

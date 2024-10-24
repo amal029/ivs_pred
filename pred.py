@@ -262,11 +262,11 @@ class CT:
         self.df['b5'] = self.df['mgeq1']*self.df['mt']
         self.df['b6'] = self.df['mlt1']*self.df['mt']
 
-        if model == 'CTridge':
+        if model == 'ctridge':
             self.reg = Ridge()
-        elif model == 'CTlasso':
+        elif model == 'ctlasso':
             self.reg = Lasso()
-        elif model == 'CTenet':
+        elif model == 'ctenet':
             self.reg = ElasticNet()
 
     def fitX(self, X, features):
@@ -362,11 +362,11 @@ class SSVI:
         self.atmi = np.where(np.isclose(self.mms, 0.9999))[0][0]
 
         # XXX: The models
-        if model == 'SSVIridge':
+        if model == 'ssviridge':
             self.reg = Ridge()
-        elif model == 'SSVIlasso':
+        elif model == 'ssvilasso':
             self.reg = Lasso()
-        elif model == 'SSVIenet':
+        elif model == 'ssvienet':
             self.reg = ElasticNet()
 
         # XXX: For predicting the ATM IV
@@ -1166,13 +1166,13 @@ def regression_predict(otype, dd='./figs', model='Ridge', TSTEPS=10):
         treg = model
         reg = MPls(tokeep, intercept, model)
 
-    if model == 'CTridge' or model == 'CTlasso' or model == 'CTenet':
+    if model == 'ctridge' or model == 'ctlasso' or model == 'ctenet':
         mms = np.arange(LM, UM+MSTEP, MSTEP)
         TTS = [i for i in range(LT, UT+TSTEP, TSTEP)]
         reg = CT(model, mms, TTS, TSTEPS)
         treg = model
 
-    if model == 'SSVIridge' or model == 'SSVIlasso' or model == 'SSVIenet':
+    if model == 'ssviridge' or model == 'ssvilasso' or model == 'ssvienet':
         treg = model
         reg = SSVI(model, TSTEPS)
 
@@ -1505,8 +1505,8 @@ def linear_fit(otype):
     # XXX: Moneyness skew regression
     for j in ['./figs', './gfigs']:
         for i in [5, 20, 10]:
-            for k in ['SSVIridge', 'SSVIlasso', 'SSVIenet',
-                      # 'CTridge', 'CTlasso', 'CTenet',
+            for k in ['ssviridge', 'ssvilasso', 'ssvienet',
+                      'ctridge', 'ctlasso', 'ctenet',
                       # 'plsenet', 'plsridge', 'plslasso',
                       # 'Ridge', 'Lasso', 'ElasticNet'
                       ]:
