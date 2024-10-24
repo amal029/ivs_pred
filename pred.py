@@ -31,6 +31,7 @@ from sklearn.cross_decomposition import PLSSVD
 from scipy.stats import norm
 # from scipy.optimize import curve_fit
 from scipy.stats import ttest_1samp
+from scipy.optimize import minimize
 
 # XXX: Moneyness Bounds inclusive
 LM = 0.9
@@ -329,6 +330,156 @@ class CT:
         presY = self.reg.predict(resX)
         # XXX: do a dot product to get the pY
         pY = np.dot(presY, features.T)
+        return pY
+
+
+# XXX: The static arb free (risk neutral measure) fit called surface
+# stochastic volatility inspired (SSVI) by Gatheral 2013.
+class SSVI:
+    # SSVI
+    def SSVI(self, theta, T, rho, gamma):
+        # XXX: Heston style fit
+        phi = 1/(gamma*theta)*(1-(1-np.exp(-gamma*theta))/(gamma*theta))
+        result = (0.5 * theta) * (1 + rho * phi * self.k +
+                                  np.sqrt((phi * self.k + rho)**2 +
+                                          1 - rho**2))
+        return np.sqrt(result/T)
+
+    # no arbitrage condtion
+    def Heston_condition(self, params):
+        rho, gamma = params
+        return gamma - 0.25*(1.+np.abs(rho))
+
+    def __init__(self, model, TSTEPS):
+        self.bnds = [(-1, 1), (0+1e-6, np.inf)]
+        self.cons2 = [{'type': 'ineq', 'fun': self.Heston_condition}]
+        self.mms = np.arange(LM, UM+MSTEP, MSTEP)
+        self.tts = np.array([i/365 for i in range(LT, UT+TSTEP, TSTEP)])
+        self.k = np.log(self.mms)         # log moneyness
+        self.MMS = self.mms.size
+        self.TTS = self.tts.size
+        self.TSTEPS = TSTEPS
+        self.atmi = np.where(np.isclose(self.mms, 0.9999))[0][0]
+
+        # XXX: The models
+        if model == 'SSVIridge':
+            self.reg = Ridge()
+            self.atmreg = Ridge()
+        elif model == 'SSVIlasso':
+            self.reg = Lasso()
+            self.atmreg = Lasso()
+        elif model == 'SSVIenet':
+            self.reg = ElasticNet()
+            self.atmreg = ElasticNet()
+
+    # XXX: Fit for a given Day
+    def fitADay(self, params, Y):
+        rho, gamma = params
+        THETAS = Y[self.atmi]**2*self.tts
+        pY = list()
+        # XXX: Go slice by slice
+        for ti, T in enumerate(self.tts):
+            theta = THETAS[ti]
+            pY.append(self.SSVI(theta, T, rho, gamma))
+        # XXX: Now do a transpose of res
+        pY = np.array(pY).T
+        # XXX: Now do a sum of square differences
+        return np.sum((Y - pY)**2)
+
+    def fitY(self, tY):
+        from joblib import Parallel, delayed
+        res = Parallel(n_jobs=-1)(delayed(minimize)(self.fitADay,
+                                                    x0=[0.4, 0.1],
+                                                    args=(tY[i]),
+                                                    bounds=self.bnds,
+                                                    constraints=self.cons2,
+                                                    options={'disp': False})
+                                  for i in range(tY.shape[0]))
+
+        # XXX: Add the target THETAS for prediciting the ATM IV
+        tthetas = list()
+        for y in tY:
+            tthetas.append(y[self.atmi])
+
+        # XXX: These are the targets for predicting
+        res = np.array([[i.x[0], i.x[1]] for i in res])
+        return res, np.array(tthetas)
+
+    def fitX(self, tX):
+        def __fitX(D):
+            res = list()
+            for d in D:
+                m = minimize(self.fitADay, x0=[0.4, 0.1], args=(d),
+                             bounds=self.bnds,
+                             constraints=self.cons2,
+                             options={'disp': False})
+                m = [m.x[0], m.x[1]]
+                res.append(m)
+            return res
+
+        from joblib import Parallel, delayed
+        res = Parallel(n_jobs=-1)(delayed(__fitX)(tX[i])
+                                  for i in range(tX.shape[0]))
+        fthetas = list()
+        for x in tX:
+            thetas = list()
+            for x1 in x:
+                thetas.append(x1[self.atmi])
+            fthetas.append(thetas)
+
+        return np.array(res), np.array(fthetas)
+
+    def fit(self, tX, tY):
+        tX = tX.reshape(tX.shape[0], self.TSTEPS, self.MMS, self.TTS)
+        tY = tY.reshape(tX.shape[0], self.MMS, self.TTS)
+
+        # XXX: Fit the features
+        features, fthetas = self.fitX(tX)
+        features = features.reshape(features.shape[0],
+                                    features.shape[1]*features.shape[2])
+
+        # XXX: Fit the targets
+        targets, tthetas = self.fitY(tY)
+
+        # XXX: Fit the model
+        self.reg = self.reg.fit(features, targets)
+        print('reg score: ', self.reg.score(features, targets))
+
+        # XXX: Fit the theta prediction model
+        fthetas = fthetas.reshape(fthetas.shape[0],
+                                  fthetas.shape[1]*fthetas.shape[2])
+        self.atmreg = self.atmreg.fit(fthetas, tthetas)
+        print('atm score: ', self.atmreg.score(fthetas, tthetas))
+
+    def score(self, tX, tY):
+        pY = self.predict(tX)
+        return r2_score(tY, pY)
+
+    def predict(self, tX):
+
+        def __predict(params, THETAS):
+            rho, gamma = params[0], params[1]
+            THETAS = THETAS**2*self.tts
+            pY = list()
+            for ti, T in enumerate(self.tts):
+                theta = THETAS[ti]
+                pY.append(self.SSVI(theta, T, rho, gamma))
+            pY = np.array(pY).T
+            return pY
+
+        tX = tX.reshape(tX.shape[0], self.TSTEPS, self.MMS, self.TTS)
+        features, fthetas = self.fitX(tX)
+        features = features.reshape(features.shape[0],
+                                    features.shape[1]*features.shape[2])
+        pftargets = self.reg.predict(features)
+        pttargets = self.atmreg.predict(fthetas.reshape(fthetas.shape[0],
+                                                        (fthetas.shape[1] *
+                                                         fthetas.shape[2])))
+        from joblib import Parallel, delayed
+        pY = Parallel(n_jobs=-1)(delayed(__predict)(pftargets[i], pttargets[i])
+                                 for i in range(pttargets.shape[0]))
+        pY = np.array(pY)
+        pY = pY.reshape(pY.shape[0], pY.shape[1]*pY.shape[2])
         return pY
 
 
@@ -1019,6 +1170,10 @@ def regression_predict(otype, dd='./figs', model='Ridge', TSTEPS=10):
         reg = CT(model, mms, TTS, TSTEPS)
         treg = model
 
+    if model == 'SSVIridge' or model == 'SSVIlasso' or model == 'SSVIenet':
+        treg = model
+        reg = SSVI(model, TSTEPS)
+
     reg.fit(tX, tY)
     print('Train set R2: ', reg.score(tX, tY))
 
@@ -1348,7 +1503,8 @@ def linear_fit(otype):
     # XXX: Moneyness skew regression
     for j in ['./figs', './gfigs']:
         for i in [5, 20, 10]:
-            for k in ['CTridge', 'CTlasso', 'CTenet',
+            for k in ['SSVIridge', 'SSVIlasso', 'SSVIenet',
+                      # 'CTridge', 'CTlasso', 'CTenet',
                       # 'plsenet', 'plsridge', 'plslasso',
                       # 'Ridge', 'Lasso', 'ElasticNet'
                       ]:
