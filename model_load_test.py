@@ -15,6 +15,8 @@ import blosc2
 from pred import cr2_score, cr2_score_pval
 from pred import MPls
 from pred import NS
+from pred import CT
+from pred import SSVI
 from scipy import stats
 
 
