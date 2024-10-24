@@ -364,13 +364,13 @@ class SSVI:
         # XXX: The models
         if model == 'SSVIridge':
             self.reg = Ridge()
-            self.atmreg = Ridge()
         elif model == 'SSVIlasso':
             self.reg = Lasso()
-            self.atmreg = Lasso()
         elif model == 'SSVIenet':
             self.reg = ElasticNet()
-            self.atmreg = ElasticNet()
+
+        # XXX: For predicting the ATM IV
+        self.atmreg = Ridge()
 
     # XXX: Fit for a given Day
     def fitADay(self, params, Y):
@@ -441,15 +441,15 @@ class SSVI:
         # XXX: Fit the targets
         targets, tthetas = self.fitY(tY)
 
-        # XXX: Fit the model
+        # XXX: Fit the model -- this score is very low!
         self.reg = self.reg.fit(features, targets)
-        print('reg score: ', self.reg.score(features, targets))
+        # print('reg score: ', self.reg.score(features, targets))
 
         # XXX: Fit the theta prediction model
         fthetas = fthetas.reshape(fthetas.shape[0],
                                   fthetas.shape[1]*fthetas.shape[2])
         self.atmreg = self.atmreg.fit(fthetas, tthetas)
-        print('atm score: ', self.atmreg.score(fthetas, tthetas))
+        # print('atm score: ', self.atmreg.score(fthetas, tthetas))
 
     def score(self, tX, tY):
         pY = self.predict(tX)
