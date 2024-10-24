@@ -471,7 +471,9 @@ class SSVI:
         features, fthetas = self.fitX(tX)
         features = features.reshape(features.shape[0],
                                     features.shape[1]*features.shape[2])
+        check_is_fitted(self.reg)
         pftargets = self.reg.predict(features)
+        check_is_fitted(self.atmreg)
         pttargets = self.atmreg.predict(fthetas.reshape(fthetas.shape[0],
                                                         (fthetas.shape[1] *
                                                          fthetas.shape[2])))
