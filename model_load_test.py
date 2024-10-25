@@ -608,8 +608,8 @@ def call_dmtest(otype):
               'pmlasso', 'pmenet', 'pmplsridge', 'pmplslasso',
               'pmplsenet', 'msklasso', 'mskenet', 'mskplsridge', 'mskplslasso',
               'mskplsenet', 'msknsridge', 'msknslasso', 'msknsenet',
-              'CTridge', 'CTlasso', 'CTenet', 'SSVIridge',
-              'SSVIlasso', 'SSVIenet',
+              'ctridge', 'ctlasso', 'ctenet', 'ssviridge',
+              'ssvilasso', 'ssvienet',
               'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
               'tskplsenet', 'tsknsridge', 'tsknslasso', 'tsknsenet',
               'ridge', 'mskridge', 'pmridge', 'tskridge']
@@ -719,8 +719,8 @@ def call_overall(otype):
     # XXX: Now plot the overall RMSE, MAPE, and R2 for all models
     # average across all results.
     TTS = [20, 10, 5]
-    lmodels = ['CTridge', 'CTlasso', 'CTenet',
-               'SSVIridge', 'SSVIlasso', 'SSVIenet',
+    lmodels = ['ctridge', 'ctlasso', 'ctenet',
+               'ssviridge', 'ssvilasso', 'ssvienet',
                'sridge', 'slasso', 'senet',
                'splsridge', 'splslasso', 'splsenet',
                'pmridge', 'pmlasso',
@@ -729,8 +729,8 @@ def call_overall(otype):
                'mskplsenet', 'msknsridge', 'msknslasso', 'msknsenet',
                'tskridge', 'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
                'tskplsenet', 'tsknsridge', 'tsknslasso', 'tsknsenet']
-    models = ['CTridge', 'CTlasso', 'CTenet',
-              'SSVIridge', 'SSVIlasso', 'SSVIenet',
+    models = ['ctridge', 'ctlasso', 'ctenet',
+              'ssviridge', 'ssvilasso', 'ssvienet',
               'ridge', 'lasso', 'enet', 'plsridge', 'plslasso', 'plsenet',
               'pmridge', 'pmlasso',
               'pmenet', 'pmplsridge', 'pmplslasso', 'pmplsenet',
@@ -1044,8 +1044,8 @@ if __name__ == '__main__':
     plt.style.use('seaborn-v0_8-whitegrid')
 
     # XXX: model vs model
-    for otype in ['call', 'put']:
-        model_v_model(otype)
+    # for otype in ['call', 'put']:
+    #     model_v_model(otype)
 
     for otype in ['call', 'put']:
         # XXX: Plot the bar graph for overall results

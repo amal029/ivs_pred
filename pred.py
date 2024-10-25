@@ -387,6 +387,7 @@ class SSVI:
                               x0=[0.4, 0.1],
                               args=(tY[i]),
                               bounds=self.bnds,
+                              method='COBYQA',
                               options={'disp': False})
             for i in range(tY.shape[0]))
 
@@ -405,6 +406,7 @@ class SSVI:
             for d in D:
                 m = minimize(self.fitADay, x0=[0.4, 0.1], args=(d),
                              bounds=self.bnds,
+                             method='COBYQA',
                              options={'disp': False})
                 m = [m.x[0], m.x[1]]
                 res.append(m)
