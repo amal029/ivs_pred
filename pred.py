@@ -338,18 +338,11 @@ class CT:
 class SSVI:
     # SSVI
     def SSVI(self, theta, T, rho, nu):
-        # XXX: Heston style fit
-        # phi = 1/(gamma*theta)*(1-(1-np.exp(-gamma*theta))/(gamma*theta))
         phi = nu / (theta**0.5)  # power law
         result = (0.5 * theta) * (1 + rho * phi * self.k +
                                   np.sqrt((phi * self.k + rho)**2 +
                                           1 - rho**2))
         return np.sqrt(result/T)
-
-    # no arbitrage condtion
-    # def Heston_condition(self, params):
-    #     rho, gamma = params
-    #     return gamma - 0.25*(1.+np.abs(rho))
 
     def __init__(self, model, TSTEPS):
         self.bnds = [(-1+1e-6, 1-1e-6), (0+1e-6, np.inf)]
