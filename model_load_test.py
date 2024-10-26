@@ -555,6 +555,12 @@ def overall(fname):
     # date = pd.to_datetime(data[:, 0], format='%Y%m%d')
     y = data[:, 1:MS*TS+1].astype(float, copy=False)
     yp = data[:, MS*TS+1:].astype(float, copy=False)
+    # XXX: This is being done for handling nan values
+    mask = np.isnan(yp)
+    if (mask.sum() > 0):
+        print('Nan values in prediction: ', mask.sum())
+        yp[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
+                             yp[~mask]) 
     # print(date.shape, y.shape, yp.shape)
 
     # XXX: Get the rolling RMSE
@@ -603,12 +609,12 @@ def model_v_model(otype):
 
 
 def call_dmtest(otype):
-    TTS = [20, 10, 5]
-    models = ['lasso', 'enet', 'plsridge', 'plslasso', 'plsenet',
+    TTS = [10, 20, 5]
+    models = ['ssviridge', 'lasso', 'enet', 'plsridge', 'plslasso', 'plsenet',
               'pmlasso', 'pmenet', 'pmplsridge', 'pmplslasso',
               'pmplsenet', 'msklasso', 'mskenet', 'mskplsridge', 'mskplslasso',
               'mskplsenet', 'msknsridge', 'msknslasso', 'msknsenet',
-              'ctridge', 'ctlasso', 'ctenet', 'ssviridge',
+              'ctridge', 'ctlasso', 'ctenet',
               'ssvilasso', 'ssvienet',
               'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
               'tskplsenet', 'tsknsridge', 'tsknslasso', 'tsknsenet',
@@ -627,10 +633,11 @@ def call_dmtest(otype):
                                                               len(models))
            for t in TTS}
 
-    cache = {i: {j: {k: None for k in models} for j in TTS}
-             for i in ['figs', 'gfigs']}
     for dd in ['figs', 'gfigs']:
         for ts in TTS:
+            # XXX: Moved the cache inside to reduce memory consumption
+            cache = {i: {j: {k: None for k in models} for j in TTS}
+                     for i in ['figs', 'gfigs']}
             # fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, sharex=True)
             for i in range(len(models)-1):
                 name1 = ('./final_results/%s_%s_ts_%s_model_%s.npy.gz' %
@@ -638,6 +645,12 @@ def call_dmtest(otype):
                 print('Doing %d: %s' % (i, name1))
                 if cache[dd][ts][models[i]] is None:
                     y, yp = getpreds(name1)
+                    mask = np.isnan(yp)
+                    if (mask.sum() > 0):
+                        print('Nan values in prediction: ', mask.sum())
+                        yp[mask] = np.interp(np.flatnonzero(mask),
+                                             np.flatnonzero(~mask),
+                                             yp[~mask])
                     cache[dd][ts][models[i]] = (y, yp)
                 else:
                     y, yp = cache[dd][ts][models[i]]
@@ -648,6 +661,12 @@ def call_dmtest(otype):
                     print('Doing %d: %s' % (j, name2))
                     if cache[dd][ts][models[j]] is None:
                         yk, ypk = getpreds(name2)
+                        mask = np.isnan(ypk)
+                        if (mask.sum() > 0):
+                            print('Nan values in prediction: ', mask.sum())
+                            yp[mask] = np.interp(np.flatnonzero(mask),
+                                                 np.flatnonzero(~mask),
+                                                 ypk[~mask])
                         cache[dd][ts][models[j]] = (yk, ypk)
                     else:
                         yk, ypk = cache[dd][ts][models[j]]
@@ -718,9 +737,9 @@ def call_timeseries(otype):
 def call_overall(otype):
     # XXX: Now plot the overall RMSE, MAPE, and R2 for all models
     # average across all results.
-    TTS = [20, 10, 5]
-    lmodels = ['ctridge', 'ctlasso', 'ctenet',
-               'ssviridge', 'ssvilasso', 'ssvienet',
+    TTS = [10, 20, 5]
+    lmodels = ['ssviridge', 'ctridge', 'ctlasso', 'ctenet',
+               'ssvilasso', 'ssvienet',
                'sridge', 'slasso', 'senet',
                'splsridge', 'splslasso', 'splsenet',
                'pmridge', 'pmlasso',
@@ -729,8 +748,8 @@ def call_overall(otype):
                'mskplsenet', 'msknsridge', 'msknslasso', 'msknsenet',
                'tskridge', 'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
                'tskplsenet', 'tsknsridge', 'tsknslasso', 'tsknsenet']
-    models = ['ctridge', 'ctlasso', 'ctenet',
-              'ssviridge', 'ssvilasso', 'ssvienet',
+    models = ['ssviridge', 'ctridge', 'ctlasso', 'ctenet',
+              'ssvilasso', 'ssvienet',
               'ridge', 'lasso', 'enet', 'plsridge', 'plslasso', 'plsenet',
               'pmridge', 'pmlasso',
               'pmenet', 'pmplsridge', 'pmplslasso', 'pmplsenet',
@@ -1047,11 +1066,11 @@ if __name__ == '__main__':
     # for otype in ['call', 'put']:
     #     model_v_model(otype)
 
-    for otype in ['call', 'put']:
-        # XXX: Plot the bar graph for overall results
-        call_overall(otype)
-        # XXX: Plot the best time series RMSE and MAPE
-        call_timeseries(otype)
+    # for otype in ['call', 'put']:
+    #     # XXX: Plot the bar graph for overall results
+    #     call_overall(otype)
+    #     # XXX: Plot the best time series RMSE and MAPE
+    #     call_timeseries(otype)
 
     for otype in ['call', 'put']:
         # XXX: DM test across time (RMSE)
