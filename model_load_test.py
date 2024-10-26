@@ -1072,18 +1072,18 @@ if __name__ == '__main__':
     #     # XXX: Plot the best time series RMSE and MAPE
     #     call_timeseries(otype)
 
-    for otype in ['call', 'put']:
-        # XXX: DM test across time (RMSE)
-        call_dmtest(otype)
+    # for otype in ['call', 'put']:
+    #     # XXX: DM test across time (RMSE)
+    #     call_dmtest(otype)
 
     # XXX: r2_score for moneyness and term structure
     for otype in ['call', 'put']:
         r2_rmse_score_mt(otype)
 
-    for otype in ['call', 'put']:
-        direction(otype)
+    # for otype in ['call', 'put']:
+    #     direction(otype)
 
     # XXX: This test compares different lag lengths for the same model,
     # usually there is literally no difference.
-    for otype in ['call', 'put']:
-        lag_test(otype)
+    # for otype in ['call', 'put']:
+    #     lag_test(otype)
