@@ -30,8 +30,8 @@ def date_to_num(otype, date, dd='./figs'):
     return count
 
 
-def num_to_date(num, dd='./figs'):
-    ff = sorted(glob.glob(dd+'/*.npy'))
+def num_to_date(otype, num, dd='./figs'):
+    ff = sorted(glob.glob('./'+otype+'_'+dd.split('/')[1]+'/*.npy'))
     return ff[num].split('/')[-1].split('.')[0]
 
 
