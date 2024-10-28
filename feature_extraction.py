@@ -7,7 +7,7 @@ import os
 # import zipfile as zip
 # import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import Ridge, Lasso, ElasticNet
 from pred import load_data 
 from sklearn.metrics import root_mean_squared_error
 from sklearn.metrics import mean_absolute_percentage_error
@@ -289,65 +289,50 @@ def extract_features(tX, tY, model_name='pca', TSTEPS=21, type='tskew', dd='./fi
             tX = tX.reshape(tX.shape[0], TSTEPS, tX.shape[1]//TSTEPS)
 
         tX = har_transform(tX, TSTEPS=TSTEPS, type=type)
-    elif model_name == 'autoencoder':
-        encoding_dim = TSTEPS//2 
-
-        if type[1:] == 'skew' or type == 'surf':
-            num_points = tX.shape[1]//TSTEPS
-            encoding_dim = encoding_dim*num_points
-
-        encoder = autoencoder_fit(tX, tY, encoding_dim=encoding_dim, intermediate_dim=None, TSTEPS=TSTEPS)
-
-        # Transform data
-        tX = encoder.predict(tX)
-
-        # Save encoder model
-        if save:
-            if type == 'point':
-                if dd != './gfigs':
-                    encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_%s_encoder.keras' % (type, model_name, TSTEPS, m, t,otype))
-                else:
-                    encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_%s_encoder_gfigs.keras' % (type, model_name, TSTEPS, m, t,otype))
-            else:
-                if dd != './gfigs':
-                    vae_encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_encoder.keras' % (type, model_name, TSTEPS, m, otype))
-                else:
-                    vae_encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_encoder_gfigs.keras' % (type, model_name, TSTEPS, m, otype))
-
-        return tX
-        
     elif model_name == 'vae':
-        encoding_dim = TSTEPS//2 
-
-        if type[1:] == 'skew' or type == 'surf':
-            num_points = tX.shape[1]//TSTEPS
-            # latent_dim = encoding_dim*num_points
-            # intermediate_dim = (encoding_dim+1)*num_points
-            latent_dim = num_points//2
-            intermediate_dim = num_points 
-        else:
-            latent_dim = encoding_dim
-            intermediate_dim = (encoding_dim+1)
-
-        vae_encoder = autoencoder_fit(tX, tY, encoding_dim=latent_dim, intermediate_dim=intermediate_dim, vae=True, TSTEPS=TSTEPS)
-
-        # Transform data
-        tX = vae_encoder.predict(tX)[2]
-
-        # Save encoder model
-        if save:
-            if type == 'point':
-                if dd != './gfigs':
-                    vae_encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_%s_encoder.keras' % (type, model_name, TSTEPS, m, t,otype))
-                else:
-                    vae_encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_%s_encoder_gfigs.keras' % (type, model_name, TSTEPS, m, t, otype))
+        # XXX: if encoder is saved, load it
+        if type == 'point':
+            if dd != './gfigs':
+                tosave = './%s_feature_models/%s_ts_%s_%s_%s_%s_encoder.keras' % (type, model_name, TSTEPS, m, t,otype)
             else:
-                if dd != './gfigs':
-                    vae_encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_encoder.keras' % (type, model_name, TSTEPS, m, otype))
-                else:
-                    vae_encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_encoder_gfigs.keras' % (type, model_name, TSTEPS, m, otype))
-                    
+                tosave = './%s_feature_models/%s_ts_%s_%s_%s_%s_encoder_gfigs.keras' % (type, model_name, TSTEPS, m, t,otype)
+        if type=='surf':
+            if dd == './figs':
+                tosave = './%s_feature_models/%s_ts_%s_%s_encoder.keras' % (type, model_name, TSTEPS, otype)
+            else:
+                tosave = './%s_feature_models/%s_ts_%s_%s_encoder_gfigs.keras' % (type, model_name, TSTEPS, otype)
+        else:
+            if dd != './gfigs':
+                tosave = './%s_feature_models/%s_ts_%s_%s_%s_encoder.keras' % (type, model_name, TSTEPS, m, otype)
+            else:
+                tosave = './%s_feature_models/%s_ts_%s_%s_%s_encoder_gfigs.keras' % (type, model_name, TSTEPS, m, otype)
         
+        if os.path.exists(tosave):
+            vae_encoder = keras.saving.load_model(tosave, custom_objects={'VAE': VAE, 'Sampling': Sampling})
+            vae_encoder.predict(tX)[2]
+
+        else:
+            encoding_dim = TSTEPS//2 
+
+            if type[1:] == 'skew' or type == 'surf':
+                num_points = tX.shape[1]//TSTEPS
+                # latent_dim = encoding_dim*num_points
+                # intermediate_dim = (encoding_dim+1)*num_points
+                latent_dim = num_points//2
+                intermediate_dim = num_points 
+            else:
+                latent_dim = encoding_dim
+                intermediate_dim = (encoding_dim+1)
+
+            vae_encoder = autoencoder_fit(tX, tY, encoding_dim=latent_dim, intermediate_dim=intermediate_dim, vae=True, TSTEPS=TSTEPS)
+
+            # Transform data
+            tX = vae_encoder.predict(tX)[2]
+
+            # Save encoder model
+            if save:
+                vae_encoder.save(tosave)
+                    
         return tX
 
     else: # PCA
@@ -374,7 +359,15 @@ def validation(vX, vY, model):
     print('R2: ', r2)
     return rmse, mape, r2
 
-def surf_pred(data, otype, model_name, TSTEPS, dd):
+def regression_model(model="ridge"):
+    if model == "ridge":
+        return Ridge()
+    elif model == "lasso":
+        return Lasso()
+    elif model == "enet":
+        return ElasticNet()
+
+def surf_pred(data, otype, model_name, TSTEPS, dd, learn="ridge"):
     if not os.path.exists('./surf_feature_models'):
         os.makedirs('./surf_feature_models')
 
@@ -397,7 +390,7 @@ def surf_pred(data, otype, model_name, TSTEPS, dd):
     tX = extract_features(tX, tY, model_name=model_name, TSTEPS=TSTEPS, type='surf', dd=dd, otype=otype)
 
     # Fit Regression model
-    model = Ridge()
+    model = regression_model(learn) 
     model.fit(tX, tY)
 
 
@@ -405,13 +398,13 @@ def surf_pred(data, otype, model_name, TSTEPS, dd):
     # validation(tX, tY, model)
 
     if dd != './gfigs':
-        with open('./surf_feature_models/%s_ts_%s_%s.pkl' % (model_name, TSTEPS, otype), 'wb') as f:
+        with open('./surf_feature_models/%s%s_ts_%s_%s.pkl' % (learn, model_name, TSTEPS, otype), 'wb') as f:
             pickle.dump(model, f)
     else:
-        with open('./surf_feature_models/%s_ts_%s_%s_gfigs.pkl' % (model_name, TSTEPS, otype), 'wb') as f:
+        with open('./surf_feature_models/%s%s_ts_%s_%s_gfigs.pkl' % (learn, model_name, TSTEPS, otype), 'wb') as f:
             pickle.dump(model, f)
 
-def tskew_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs'):
+def tskew_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs', learn="ridge"):
     # Check if directory exists
     if not os.path.exists('./tskew_feature_models'):
         os.makedirs('./tskew_feature_models')
@@ -452,21 +445,21 @@ def tskew_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs'):
         tskew = np.append(tskew, ms, axis=1)
 
         # Fit Regression model
-        model = Ridge()
+        model = regression_model(learn)
         model.fit(tskew, tYY)
 
         # Validate the model
         # validation(tskew, tYY, model)
 
         if dd != './gfigs':
-            with open('./tskew_feature_models/%s_ts_%s_%s_%s.pkl' % (model_name, TSTEPS, m, otype), 'wb') as f:
+            with open('./tskew_feature_models/%s%s_ts_%s_%s_%s.pkl' % (learn, model_name, TSTEPS, m, otype), 'wb') as f:
                 pickle.dump(model, f)
         else:
-            with open('./tskew_feature_models/%s_ts_%s_%s_%s_gfigs.pkl' % (model_name, TSTEPS, m, otype), 'wb') as f:
+            with open('./tskew_feature_models/%s%s_ts_%s_%s_%s_gfigs.pkl' % (learn, model_name, TSTEPS, m, otype), 'wb') as f:
                 pickle.dump(model, f)
 
 
-def mskew_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs'):
+def mskew_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs', learn="ridge"):
     # Check if directory exists
     if not os.path.exists('./mskew_feature_models'):
         os.makedirs('./mskew_feature_models')
@@ -502,20 +495,20 @@ def mskew_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs'):
         mskew = np.append(mskew, ts, axis=1)
 
         # Fit Regression model
-        model = Ridge()
+        model = regression_model(learn)
         model.fit(mskew, tYY)
 
         # Validate the model
         # validation(mskew, tYY, model)
 
         if dd != './gfigs':
-            with open('./mskew_feature_models/%s_ts_%s_%s_%s.pkl' % (model_name, TSTEPS, t, otype), 'wb') as f:
+            with open('./mskew_feature_models/%s%s_ts_%s_%s_%s.pkl' % (learn, model_name, TSTEPS, t, otype), 'wb') as f:
                 pickle.dump(model, f)
         else:
-            with open('./mskew_feature_models/%s_ts_%s_%s_%s_gfigs.pkl' % (model_name, TSTEPS, t, otype), 'wb') as f:
+            with open('./mskew_feature_models/%s%s_ts_%s_%s_%s_gfigs.pkl' % (learn, model_name, TSTEPS, t, otype), 'wb') as f:
                 pickle.dump(model, f)
 
-def point_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs'):
+def point_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs', learn="ridge"):
     # Check if directory exists
     if not os.path.exists('./point_feature_models'):
         os.makedirs('./point_feature_models')
@@ -551,7 +544,7 @@ def point_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs'):
             train_vec = np.append(train_vec, k, axis=1)
 
             # Fit Regression model
-            reg = Ridge()
+            reg = regression_model(learn)
             reg.fit(train_vec, tY[:, i, j])
 
             # Validate the model
@@ -560,12 +553,12 @@ def point_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs'):
             # XXX: Save the model
             import pickle
             if dd != './gfigs':
-                with open('./point_feature_models/%s_ts_%s_%s_%s_%s.pkl' %
-                          (model_name, TSTEPS, s, t, otype), 'wb') as f:
+                with open('./point_feature_models/%s%s_ts_%s_%s_%s_%s.pkl' %
+                          (learn, model_name, TSTEPS, s, t, otype), 'wb') as f:
                     pickle.dump(reg, f)
             else:
-                with open('./point_feature_models/%s_ts_%s_%s_%s_%s_gfigs.pkl' %
-                          (model_name, TSTEPS, s, t, otype), 'wb') as f:
+                with open('./point_feature_models/%s%s_ts_%s_%s_%s_%s_gfigs.pkl' %
+                          (learn, model_name, TSTEPS, s, t, otype), 'wb') as f:
                     pickle.dump(reg, f)
 
 def run_all_models():
@@ -607,40 +600,44 @@ if __name__ == "__main__":
                     # p = multiprocessing.Process(target=surf_pred, args=(data, n, k, j, i))
                     # p.start()
                     # p.join()
-        # for i in ['./figs', './gfigs']:
-        #     for j in [5, 10, 20]:
-        #         data = load_data(otype=n, dd=i, TSTEPS=j)
-        #         for k in ['vae']:
-        #             print('Running for mskew: ', n, i, k, j)
-        #             p = multiprocessing.Process(target=mskew_pred, args=(data, n, k, j, i))
-        #             p.start()
-        #             p.join()
+        for i in ['./figs', './gfigs']:
+            for x in ['enet', 'lasso']:
+                for j in [5, 10, 20]:
+                    data = load_data(otype=n, dd=i, TSTEPS=j)
+                    for k in ['vae', 'pca']:
+                        print('Running for mskew: ', n, i, k, j)
+                        p = multiprocessing.Process(target=mskew_pred, args=(data, n, k, j, i, x))
+                        p.start()
+                        p.join()
 
         for i in ['./figs', './gfigs']:
-            for j in [5, 10, 20]:
-                data = load_data(otype=n, dd=i, TSTEPS=j)
-                for k in ['vae']:
-                    print('Running for point: ', n, i, k, j)
-                    p = multiprocessing.Process(target=point_pred, args=(data, n, k, j, i))
-                    p.start()
-                    p.join()
-                    # point_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
+            for x in ['enet', 'lasso']:
+                for j in [5, 10, 20]:
+                    data = load_data(otype=n, dd=i, TSTEPS=j)
+                    for k in ['vae', 'pca']:
+                        print('Running for point: ', n, i, k, j)
+                        p = multiprocessing.Process(target=point_pred, args=(data, n, k, j, i, x))
+                        p.start()
+                        p.join()
+                        # point_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
         
-        # for i in ['./figs', './gfigs']:
-        #     for j in [5, 10, 20]:
-        #         data = load_data(otype=n, dd=i, TSTEPS=j)
-        #         for k in ['vae']:
-        #             print('Running for tskew: ', n, i, k, j)
-        #             p = multiprocessing.Process(target=tskew_pred, args=(data, n, k, j, i))
-        #             p.start()
-        #             p.join()
-                    # tskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
+        for i in ['./figs', './gfigs']:
+            for x in ['enet', 'lasso']:
+                for j in [5, 10, 20]:
+                    data = load_data(otype=n, dd=i, TSTEPS=j)
+                    for k in ['vae', 'pca']:
+                        print('Running for tskew: ', n, i, k, j)
+                        p = multiprocessing.Process(target=tskew_pred, args=(data, n, k, j, i, x))
+                        p.start()
+                        p.join()
+                        # tskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
   
         # For HAR 
-        # for i in ['./figs', './gfigs']:
-        #     data = load_data(otype=n, dd=i, TSTEPS=21)
-        #     print('Running for: ', n, i, 'har')
-        #     surf_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i)
-            # tskew_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
-            # mskew_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
-            # point_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
+        for i in ['./figs', './gfigs']:
+            for x in ['enet', 'lasso']:
+                data = load_data(otype=n, dd=i, TSTEPS=21)
+                print('Running for: ', n, i, 'har')
+                surf_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
+                tskew_pred(otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
+                mskew_pred(otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
+                point_pred(otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
