@@ -1,15 +1,14 @@
-import pandas as pd
+print('importing')
+# import pandas as pd
 import pickle
 import numpy as np
 import os
-os.environ["KERAS_BACKEND"] = "tensorflow"
-import fnmatch
+# import fnmatch
 # import zipfile as zip
-import keras
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.linear_model import Ridge
-from pred import load_data, load_data_for_keras
+from pred import load_data 
 from sklearn.metrics import root_mean_squared_error
 from sklearn.metrics import mean_absolute_percentage_error
 from sklearn.metrics import r2_score
@@ -18,7 +17,8 @@ from keras.models import Model
 from keras import ops
 from keras import layers
 import tensorflow as tf
-import multiprocessing
+import keras
+# import multiprocessing
 
 import pred
 
@@ -110,13 +110,26 @@ class Autoencoder:
         else: 
             self.model = self.autoencoder_build()
 
-    def fit(self, tX, epochs=100, batch_size=125, shuffle=True, validation_split=0.2):
+    # Batch size 128 for point model
+    def fit(self, tX, TSTEPS, epochs=100, batch_size=1028, shuffle=True, validation_split=0.0):
         # reduce learning rate
-        reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='loss', factor=0.2, patience=5, min_lr=0.0001)
+        reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='loss', factor=0.2, patience=2, min_lr=0.00001)
         # Early stopping
-        early_stopping = tf.keras.callbacks.EarlyStopping(monitor='loss', patience=10)
+        early_stopping = tf.keras.callbacks.EarlyStopping(monitor='loss', patience=5)
         # tX = tX.reshape(tX.shape[0], tX.shape[1]*tX.shape[2])
-        self.model.fit(tX, tX, epochs=epochs, batch_size=batch_size, 
+        # Create a generator from the input data tX
+        # def generator(data):
+        #     for i in range(data.shape[0]):
+        #         yield (data[i], data[i])
+        
+        # dataset = tf.data.Dataset.from_tensor_slices((tX, tX)).batch(batch_size)
+
+        # dataset = tf.data.Dataset.from_generator(lambda: generator(tX), 
+        #                                          output_types=(tf.float32, tf.float32),
+        #                                          output_shapes=([tX.shape[1]], [tX.shape[1]]))
+        # dataset = dataset.batch(1)
+        # dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
+        self.model.fit(tX, tX, epochs=epochs, batch_size=batch_size,
                        shuffle=shuffle, validation_split=validation_split, callbacks=[reduce_lr, early_stopping], verbose=1)
     
     def save(self, path):
@@ -152,20 +165,20 @@ class Autoencoder:
         # Sample from the latent space
         z = Sampling(name='sampling')([z_mean, z_log_var]) 
 
-        # Encoder
         encoder = Model(inputs,  [z_mean, z_log_var, z], name='encoder')
         # encoder.summary()
 
         # Decoder
         latent_inputs = Input(shape=(latent_dim,), name='z_sampling')
         x = Dense(intermediate_dim, activation='relu')(latent_inputs)
-        outputs = Dense(input_shape, activation='sigmoid')(x)
+        outputs = Dense(input_shape)(x)
+        outputs = keras.layers.Activation('sigmoid')(outputs)
         decoder = Model(latent_inputs, outputs, name='decoder')
         # decoder.summary()
 
         # VAE
         vae = VAE(encoder, decoder)
-        vae.compile(optimizer='adam')
+        vae.compile(optimizer=keras.optimizers.Adam(learning_rate=0.1), jit_compile=True)
 
         return vae
 
@@ -185,12 +198,12 @@ class Autoencoder:
 
 def autoencoder_transform(encoder , tX, type='skew', vae=False):
     # Strip the moneyness or term structure feature
-    if type == 'skew':
-        structure = tX[:, -1:]
-        tX = tX[:, :-1]
-    else: # point model
-        structure = tX[:, -2:]
-        tX = tX[:, :-2]
+    # if type == 'skew':
+    #     structure = tX[:, -1:]
+    #     tX = tX[:, :-1]
+    # else: # point model
+    #     structure = tX[:, -2:]
+    #     tX = tX[:, :-2]
     
     tX_transformed = encoder.predict(tX)
 
@@ -199,13 +212,13 @@ def autoencoder_transform(encoder , tX, type='skew', vae=False):
         tX_transformed = tX_transformed[2]
 
     # Add the structure back So we end up with our encoded features + structure at the end of each sample
-    tX_transformed = np.concatenate([tX_transformed, structure], axis=1)
+    # tX_transformed = np.concatenate([tX_transformed, structure], axis=1)
 
     return tX_transformed
 
 
 
-def autoencoder_fit(tX, ty, encoding_dim, intermediate_dim,  vae=False):
+def autoencoder_fit(tX, ty, encoding_dim, intermediate_dim, TSTEPS, vae=False):
     """
     Uses an autoencoder to extract features from the data 
     and then uses a regression model to predict the implied volatility
@@ -216,7 +229,7 @@ def autoencoder_fit(tX, ty, encoding_dim, intermediate_dim,  vae=False):
     Output: encoder, ridge model 
     """
     encoder = Autoencoder(encoding_dim, tX.shape[1], vae=vae, intermediate_dim=intermediate_dim)
-    encoder.fit(tX)
+    encoder.fit(tX, TSTEPS)
     return encoder 
 
 def pca_predict(valX, model, n_components, TSTEPS):
@@ -232,7 +245,7 @@ def pca_transform(tX, n_components=3):
     Ouput shape: (samples, components*tX.shape[-1])
     """
     # Fit and transform the data
-    pca = PCA(n_components=n_components)
+    pca = PCA(n_components=min(n_components, 200))
     try:
         tX_transform = pca.fit_transform(tX)
         return tX_transform
@@ -256,15 +269,17 @@ def har_transform(tX, TSTEPS=21, type='skew'):
     if TSTEPS != 21:
         raise ValueError('TSTEP must be 21 for HAR method of feature extraction')
 
+    keepdims = type == 'point' 
+
     # Get average skew for 21 days
-    skew1 = np.mean(tX[:, :], axis=1, keepdims=True)
-    skew2 = np.mean(tX[:, -5:], axis=1, keepdims=True)
-    skew3 = np.mean(tX[:, -1:], axis=1, keepdims=True)
+    skew1 = np.mean(tX[:, :], axis=1, keepdims=keepdims)
+    skew2 = np.mean(tX[:, -5:], axis=1, keepdims=keepdims)
+    skew3 = np.mean(tX[:, -1:], axis=1, keepdims=keepdims)
     tX = np.concatenate([skew1, skew2, skew3], axis=1)
 
     return tX 
 
-def extract_features(tX, tY, model_name='pca', TSTEPS=21, type='tskew', dd='./figs', otype='call', m=0, save=True):
+def extract_features(tX, tY, model_name='pca', TSTEPS=21, type='tskew', dd='./figs', otype='call', m=0,t=0, save=True):
     """
     Extracts features from the given data
     """
@@ -288,41 +303,61 @@ def extract_features(tX, tY, model_name='pca', TSTEPS=21, type='tskew', dd='./fi
 
         # Save encoder model
         if save:
-            if dd != './gfigs':
-                encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_encoder.keras' % (type, model_name, TSTEPS, m, otype))
+            if type == 'point':
+                if dd != './gfigs':
+                    encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_%s_encoder.keras' % (type, model_name, TSTEPS, m, t,otype))
+                else:
+                    encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_%s_encoder_gfigs.keras' % (type, model_name, TSTEPS, m, t,otype))
             else:
-                encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_encoder_gfigs.keras' % (type, model_name, TSTEPS, m, otype))
+                if dd != './gfigs':
+                    vae_encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_encoder.keras' % (type, model_name, TSTEPS, m, otype))
+                else:
+                    vae_encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_encoder_gfigs.keras' % (type, model_name, TSTEPS, m, otype))
 
-        return tX, encoder
+        return tX
         
     elif model_name == 'vae':
-        encoding_dim = TSTEPS//2
+        encoding_dim = TSTEPS//2 
 
         if type[1:] == 'skew' or type == 'surf':
             num_points = tX.shape[1]//TSTEPS
-            latent_dim = encoding_dim*num_points
-            intermediate_dim = (encoding_dim+1)*num_points
+            # latent_dim = encoding_dim*num_points
+            # intermediate_dim = (encoding_dim+1)*num_points
+            latent_dim = num_points//2
+            intermediate_dim = num_points 
         else:
             latent_dim = encoding_dim
             intermediate_dim = (encoding_dim+1)
 
-        vae_encoder = autoencoder_fit(tX, tY, encoding_dim=latent_dim, intermediate_dim=intermediate_dim, vae=True)
+        vae_encoder = autoencoder_fit(tX, tY, encoding_dim=latent_dim, intermediate_dim=intermediate_dim, vae=True, TSTEPS=TSTEPS)
 
         # Transform data
         tX = vae_encoder.predict(tX)[2]
 
         # Save encoder model
         if save:
-            if dd != './gfigs':
-                vae_encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_encoder.keras' % (type, model_name, TSTEPS, m, otype))
+            if type == 'point':
+                if dd != './gfigs':
+                    vae_encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_%s_encoder.keras' % (type, model_name, TSTEPS, m, t,otype))
+                else:
+                    vae_encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_%s_encoder_gfigs.keras' % (type, model_name, TSTEPS, m, t, otype))
             else:
-                vae_encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_encoder_gfigs.keras' % (type, model_name, TSTEPS, m, otype))
+                if dd != './gfigs':
+                    vae_encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_encoder.keras' % (type, model_name, TSTEPS, m, otype))
+                else:
+                    vae_encoder.save('./%s_feature_models/%s_ts_%s_%s_%s_encoder_gfigs.keras' % (type, model_name, TSTEPS, m, otype))
+                    
         
-        return tX, vae_encoder
+        return tX
 
     else: # PCA
-        n_components = (TSTEPS//2) * tX.shape[-1] 
-        tX = pca_transform(tX, tY, n_components=n_components)
+        if type == 'point':
+            n_components = (TSTEPS//2)
+        else:
+            num_points = tX.shape[1]//TSTEPS
+            n_components = (TSTEPS//2) * num_points 
+
+        tX = pca_transform(tX, n_components=n_components)
 
     return tX 
 
@@ -365,8 +400,9 @@ def surf_pred(data, otype, model_name, TSTEPS, dd):
     model = Ridge()
     model.fit(tX, tY)
 
+
     # Validate the model
-    validation(tX, tY, model)
+    # validation(tX, tY, model)
 
     if dd != './gfigs':
         with open('./surf_feature_models/%s_ts_%s_%s.pkl' % (model_name, TSTEPS, otype), 'wb') as f:
@@ -420,7 +456,7 @@ def tskew_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs'):
         model.fit(tskew, tYY)
 
         # Validate the model
-        validation(tskew, tYY, model)
+        # validation(tskew, tYY, model)
 
         if dd != './gfigs':
             with open('./tskew_feature_models/%s_ts_%s_%s_%s.pkl' % (model_name, TSTEPS, m, otype), 'wb') as f:
@@ -459,7 +495,7 @@ def mskew_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs'):
         tYY = tY[:, :, j]
         mskew = mskew.reshape(mskew.shape[0], mskew.shape[1]*mskew.shape[2])
 
-        mskew, encoder = extract_features(mskew, tYY, model_name=model_name, TSTEPS=TSTEPS, type='mskew', dd=dd, otype=otype, m=t, save=False)
+        mskew = extract_features(mskew, tYY, model_name=model_name, TSTEPS=TSTEPS, type='mskew', dd=dd, otype=otype, m=t, save=True)
         
         # XXX: Add t to the sample set
         ts = np.array([t]*mskew.shape[0]).reshape(mskew.shape[0], 1)
@@ -470,7 +506,7 @@ def mskew_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs'):
         model.fit(mskew, tYY)
 
         # Validate the model
-        validation(mskew, tYY, model)
+        # validation(mskew, tYY, model)
 
         if dd != './gfigs':
             with open('./mskew_feature_models/%s_ts_%s_%s_%s.pkl' % (model_name, TSTEPS, t, otype), 'wb') as f:
@@ -498,7 +534,6 @@ def point_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs'):
     mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
 
     count = 0
-
     for i, s in enumerate(mms):
         for j, t in enumerate(tts):
             if count % 50 == 0:
@@ -509,7 +544,7 @@ def point_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs'):
             train_vec = tX[:, :, i, j]
 
             # Extract features
-            train_vec = extract_features(train_vec, tY[:, i, j], model_name=model_name, TSTEPS=TSTEPS, type='point', dd=dd, otype=otype)
+            train_vec = extract_features(train_vec, tY[:, i, j], model_name=model_name, TSTEPS=TSTEPS, type='point', dd=dd, otype=otype, m=s, t=t)
 
             # XXX: Add the moneyness and term structure to the sample set
             k = np.array([s, t]*tX.shape[0]).reshape(tX.shape[0], 2)
@@ -520,7 +555,7 @@ def point_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs'):
             reg.fit(train_vec, tY[:, i, j])
 
             # Validate the model
-            validation(train_vec, tY[:, i, j], reg)
+            # validation(train_vec, tY[:, i, j], reg)
 
             # XXX: Save the model
             import pickle
@@ -545,53 +580,67 @@ def run_all_models():
 
 if __name__ == "__main__":
 
-    otype = 'call'
-    dd = './figs'
-    TSTEPS = 5 
-    model_name = 'vae'
+    # otype = 'call'
+    # dd = './figs'
+    # TSTEPS = 20
+    # model_name = 'vae'
+    print("Starting")
+    import multiprocessing
 
-    data = load_data(otype, dd, TSTEPS)
-    mskew_pred(data, otype=otype, model_name=model_name, TSTEPS=TSTEPS, dd=dd)
+
+    # Set environment variable to use cpu instead of gpu
+    # os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+    # gpus = tf.config.experimental.list_physical_devices('GPU')
+    # for gpu in gpus:
+    #     tf.config.experimental.set_memory_growth(gpu, True)
+    # surf_pred(data, otype=otype, model_name=model_name, TSTEPS=TSTEPS, dd=dd)
+    # mskew_pred(data, otype=otype, model_name=model_name, TSTEPS=TSTEPS, dd=dd)
     # tskew_pred(data, otype=otype, model_name=model_name, TSTEPS=TSTEPS, dd=dd)
     # point_pred(data, otype=otype, model_name=model_name, TSTEPS=TSTEPS, dd=dd)
-    # for n in ['call', 'put']:
+    for n in ['call', 'put']:
         # for i in ['./figs', './gfigs']:
-        #     for k in ['vae']:
-        #         for j in [5, 10, 20]:
-        #             if j == 20 and n == 'call':
-        #                 continue
-        #             if (j == 10 or j == 5) and n == 'call' and i == './figs':
-        #                 continue
+        #     for j in [20]:
+        #         data = load_data(otype=n, dd=i, TSTEPS=j)
+        #         for k in ['vae', 'pca', 'har']:
+        #             print('Running for surf: ', n, i)
+        #             surf_pred(data, n, k, j, i)
+                    # p = multiprocessing.Process(target=surf_pred, args=(data, n, k, j, i))
+                    # p.start()
+                    # p.join()
+        # for i in ['./figs', './gfigs']:
+        #     for j in [5, 10, 20]:
+        #         data = load_data(otype=n, dd=i, TSTEPS=j)
+        #         for k in ['vae']:
         #             print('Running for mskew: ', n, i, k, j)
-        #             p = multiprocessing.Process(target=mskew_pred, args=(n, k, j, i))
+        #             p = multiprocessing.Process(target=mskew_pred, args=(data, n, k, j, i))
         #             p.start()
         #             p.join()
 
-        # for i in ['./figs', './gfigs']:
-        #     for k in ['vae']:
-        #         for j in [20]:
-        #             print('Running for point: ', n, i, k, j)
-        #             p = multiprocessing.Process(target=point_pred, args=(n, k, j, i))
-        #             p.start()
-        #             p.join()
-        #             # point_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
+        for i in ['./figs', './gfigs']:
+            for j in [5, 10, 20]:
+                data = load_data(otype=n, dd=i, TSTEPS=j)
+                for k in ['vae']:
+                    print('Running for point: ', n, i, k, j)
+                    p = multiprocessing.Process(target=point_pred, args=(data, n, k, j, i))
+                    p.start()
+                    p.join()
+                    # point_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
         
         # for i in ['./figs', './gfigs']:
-        #     for k in ['vae']:
-        #         for j in [5, 10, 20]:
-        #             if j == 20:
-        #                 continue
-        #             if (j == 10 or j == 5) and i == './figs' and n == 'call':
-        #                 continue
+        #     for j in [5, 10, 20]:
+        #         data = load_data(otype=n, dd=i, TSTEPS=j)
+        #         for k in ['vae']:
         #             print('Running for tskew: ', n, i, k, j)
-        #             p = multiprocessing.Process(target=tskew_pred, args=(n, k, j, i))
+        #             p = multiprocessing.Process(target=tskew_pred, args=(data, n, k, j, i))
         #             p.start()
         #             p.join()
-        #             # tskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
+                    # tskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
   
         # For HAR 
         # for i in ['./figs', './gfigs']:
+        #     data = load_data(otype=n, dd=i, TSTEPS=21)
         #     print('Running for: ', n, i, 'har')
-        #     tskew_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
-        #     mskew_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
-        #     point_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
+        #     surf_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i)
+            # tskew_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
+            # mskew_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
+            # point_pred(otype=n, model_name='har', TSTEPS=21, dd=i)
