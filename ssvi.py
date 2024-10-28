@@ -5,8 +5,9 @@ from model_load_test import date_to_num, num_to_date
 import pandas as pd
 from pred import SSVI
 import matplotlib.pyplot as plt
-from statsmodels.stats.diagnostic import het_arch
-from sklearn.linear_model import HuberRegressor
+# from statsmodels.stats.diagnostic import het_arch
+from sklearn.linear_model import Ridge
+from sklearn.metrics import r2_score
 
 
 def load_data(otype, dd='./figs', START='20020208', NUM_IMAGES=2000):
@@ -46,34 +47,9 @@ def fitandforecastARIMA(Y, order=(4, 1, 1), trend='n', fiterrors=False):
     # plot_pacf(model_fit.resid**2)
     # plt.show()
 
-    # XXX: Test resids for hetroscadicity
-    lmr, lmpr, fvalr, fpr = het_arch(model_fit.resid, nlags=10,
-                                     ddof=sum(order))
-    if lmpr <= 0.05 and fiterrors:
-        LAGS = 10
-        SCALE = 100
-        # XXX: Do Ridge regression here
-        X = np.array(model_fit.resid.values*SCALE)
-        Y = list()
-        for i in range(X.shape[0]):
-            if (i > 0) and (i % LAGS == 0):
-                Y.append(X[i])
-        Y = np.array(Y)**2
-        X = X.reshape(X.shape[0]//LAGS, LAGS)**2
-        # print(Y.shape, X.shape)
-        # XXX: Fit the Ridge model for the error residuals
-        var_model = HuberRegressor(max_iter=100000).fit(X[:-1], Y)
-        # print('OLS score: ', var_model.score(X[:-1], Y))
-        var = np.sqrt(var_model.predict(X[-1].reshape(1, -1))[0])/SCALE
-        # print('ret before: ', ret)
-        # print('var^2: ', var_model.predict(X[-1].reshape(1, -1))[0]/SCALE**2)
-        # print('var :', var)
-        if not np.isnan(var):
-            ret += var
-        # ret = ret + var if var is not np.nan else ret
-        # print('ret after: ', ret)
-        # assert (False)
-
+    # # XXX: Test resids for hetroscadicity
+    # lmr, lmpr, fvalr, fpr = het_arch(model_fit.resid, nlags=10,
+    #                                  ddof=sum(order))
     return ret
 
 
@@ -93,49 +69,32 @@ def doARIMA(params, WINDOW):
         fitandforecastARIMA(x, order=(3, 1, 1), trend='n')
     ).dropna()
 
-    from sklearn.metrics import r2_score
-    print('R2 score rho: ', r2_score(params[WINDOW:, 0], prho[:-1]))
-    print('R2 score nu: ', r2_score(params[WINDOW:, 1], pnu[:-1]))
+    return pd.DataFrame({'rho': prho[:-1], 'nu': pnu[:-1]})
 
-    # XXX: Get the error vector between prediction and reality
-    erho = params[WINDOW:, 0] - prho.values[:-1].reshape(
-        params[WINDOW:, 0].shape)
-    enu = params[WINDOW:, 1] - pnu.values[:-1].reshape(
-        params[WINDOW:, 1].shape)
 
-    # XXX: Test if the out of sample errors are normally distributed.
-    from statsmodels.stats.stattools import jarque_bera
-    jbr, jbpr, skewr, kurr = jarque_bera(erho)
-    print('JB test rho; jb:%s, jbp:%s, skew:%s, kur:%s' % (jbr, jbpr,
-                                                           skewr, kurr))
-    jbn, jbpn, skewn, kurn = jarque_bera(enu)
-    print('JB test nu; jb:%s, jbp:%s, skew:%s, kur:%s' % (jbn, jbpn,
-                                                          skewn, kurn))
-    # # XXX: Test for hetroscadicity of out of sample errors
-    # lmr, lmpr, fvalr, fpr = het_arch(erho, ddof=6)
-    # print('ARCH test rho: lm%s, lmp:%s, fr:%s, fpr:%s' % (lmr, lmpr,
-    #                                                       fvalr, fpr))
-    # lmr, lmpr, fvalr, fpr = het_arch(pnu, ddof=5)
-    # print('ARCH test rho: lm%s, lmp:%s, fr:%s, fpr:%s' % (lmr, lmpr,
-    #                                                       fvalr, fpr))
+def doATMIV(atmiv, WINDOW, TSTEP=5):
+    def RidgeFit(atmiv):
+        Y = list()
+        for i in range(atmiv.shape[0]):
+            if i > 0 and i % TSTEP == 0:
+                Y.append(atmiv[i])
+        Y = np.array(Y)
+        X = atmiv.reshape(atmiv.shape[0]//TSTEP,
+                          TSTEP, atmiv.shape[1])
+        Xf = X[:-1]
+        Xf = Xf.reshape(Xf.shape[0], Xf.shape[1]*Xf.shape[2])
+        model = Ridge().fit(Xf, Y)
+        Xp = X[-1]
+        return model.predict(Xp.reshape(1, Xp.shape[0]*Xp.shape[1]))
 
-    # XXX: Plot of out of sample errors
-    # fig, axs = plt.subplots(nrows=2, ncols=1)
-    # axs[0].plot(erho)
-    # axs[1].plot(enu)
-    # plt.show()
-    # plt.close(fig)
+    pY = list()
+    N = atmiv.shape[0]
+    for i in range(N-WINDOW):
+        aa = atmiv[i:WINDOW+i, :]
+        yy = RidgeFit(aa)
+        pY.append(yy.reshape(yy.shape[1],))
 
-    # XXX: Plot the out of sample prediction vs truth
-    # fig, axs = plt.subplots(nrows=2, ncols=1)
-    # axs[0].plot(params[:, 0], label=r'$\rho$')
-    # axs[0].plot(prho, label=r'$\hat{\rho}$')
-    # axs[0].legend()
-    # axs[1].plot(params[:, 1], label=r'$\nu$')
-    # axs[1].plot(pnu, label=r'$\hat{\nu}$')
-    # axs[1].legend()
-    # plt.show()
-    # plt.close(fig)
+    return np.array(pY)
 
 
 def main():
@@ -147,11 +106,16 @@ def main():
         ssvi = SSVI('ssviridge', 0)
         params, ATM_IV = ssvi.fitY(X['IVS'])
 
-        # XXX: Fit a volatility (GARCH style) model and forecast
-        # doGARCH(params, WINDOW, SCALE)
+        # XXX: Get the ATM_IV predictions
+        pY = doATMIV(ATM_IV, WINDOW)
+        print(ATM_IV[WINDOW:].shape, pY.shape)
+        print('R2 score ATM: ', r2_score(ATM_IV[WINDOW:], pY))
 
         # XXX: Now try this same thing with ARIMA
-        doARIMA(params, WINDOW)
+        pparams = doARIMA(params, WINDOW)
+        print(params[WINDOW:].shape, pparams.shape)
+        print('R2 score rho: ', r2_score(params[WINDOW:, 0], pparams['rho']))
+        print('R2 score nu: ', r2_score(params[WINDOW:, 1], pparams['nu']))
 
 
 if __name__ == '__main__':
