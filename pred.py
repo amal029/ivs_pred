@@ -345,6 +345,7 @@ class SSVI:
         return np.sqrt(result/T)
 
     def __init__(self, model, TSTEPS):
+        self.isfitted = False
         self.bnds = [(-1+1e-6, 1-1e-6), (0+1e-6, np.inf)]
         # self.cons2 = [{'type': 'ineq', 'fun': self.Heston_condition}]
         self.mms = np.arange(LM, UM+MSTEP, MSTEP)
@@ -424,6 +425,9 @@ class SSVI:
 
         return np.array(res), np.array(fthetas)
 
+    def check_is_fitted(self):
+        return self.isfitted
+
     def fit(self, tX, tY):
         tX = tX.reshape(tX.shape[0], self.TSTEPS, self.MMS, self.TTS)
         tY = tY.reshape(tX.shape[0], self.MMS, self.TTS)
@@ -449,23 +453,25 @@ class SSVI:
                                   fthetas.shape[1]*fthetas.shape[2])
         self.atmreg = self.atmreg.fit(fthetas, tthetas)
         # print('atm score: ', self.atmreg.score(fthetas, tthetas))
+        # XXX: I am now fitted
+        self.isfitted = True
+        return self
 
     def score(self, tX, tY):
         pY = self.predict(tX)
         return r2_score(tY, pY)
 
+    def predict1(self, params, THETAS):
+        rho, nu = params[0], params[1]
+        THETAS = THETAS**2*self.tts
+        pY = list()
+        for ti, T in enumerate(self.tts):
+            theta = THETAS[ti]
+            pY.append(self.SSVI(theta, T, rho, nu))
+        pY = np.array(pY).T
+        return pY
+
     def predict(self, tX):
-
-        def __predict(params, THETAS):
-            rho, nu = params[0], params[1]
-            THETAS = THETAS**2*self.tts
-            pY = list()
-            for ti, T in enumerate(self.tts):
-                theta = THETAS[ti]
-                pY.append(self.SSVI(theta, T, rho, nu))
-            pY = np.array(pY).T
-            return pY
-
         tX = tX.reshape(tX.shape[0], self.TSTEPS, self.MMS, self.TTS)
         features, fthetas = self.fitX(tX)
         features = features.reshape(features.shape[0],
@@ -478,7 +484,7 @@ class SSVI:
                                                          fthetas.shape[2])))
         from joblib import Parallel, delayed
         pY = Parallel(n_jobs=-1)(
-            delayed(__predict)(pftargets[i], pttargets[i])
+            delayed(self.predict1)(pftargets[i], pttargets[i])
             for i in range(pttargets.shape[0]))
         pY = np.array(pY)
         pY = pY.reshape(pY.shape[0], pY.shape[1]*pY.shape[2])

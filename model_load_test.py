@@ -560,7 +560,7 @@ def overall(fname):
     if (mask.sum() > 0):
         print('Nan values in prediction: ', mask.sum())
         yp[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
-                             yp[~mask]) 
+                             yp[~mask])
     # print(date.shape, y.shape, yp.shape)
 
     # XXX: Get the rolling RMSE
