@@ -69,8 +69,8 @@ def cr2_score(ytrue, y1, y2):
     """Own r2score from paper: Are there gains from using information
     over the surface of implied volatilies?
     ytrue: true time series
-    y1: prediction from model 1
-    y2  prediction from model 2 (benchmark to compare against)
+    y1: prediction from model 1(benchmark to compare against)
+    y2  prediction from model 2
 
     """
     assert (ytrue.shape == y1.shape)

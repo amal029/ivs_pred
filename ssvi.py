@@ -11,6 +11,7 @@ from sklearn.metrics import r2_score
 from joblib import Parallel, delayed
 from sklearn.utils.validation import check_is_fitted
 from sklearn.exceptions import NotFittedError
+from pred import cr2_score, cr2_score_pval
 
 
 def load_data(otype, dd='./figs', START='20020208', NUM_IMAGES=2000):
@@ -254,6 +255,14 @@ def main():
 
         # XXX: Get the R2 for both predictions
         print('R2 score SSVI: ', r2_score(yT, psY))
+
+        # XXX: Compare the R2 scores VAR R2 vs SSVI ARIMA
+        print('Ridge vs ARIMA SSVI: ', cr2_score(yT, prY, paY))
+        print('Ridge vs ARIMA SSVI p-val: ', cr2_score_pval(yT, prY, paY))
+
+        # XXX: Compare the R2 scores Ridge SSVI vs SSVI ARIMA
+        print('Ridge SSVI vs ARIMA SSVI: ', cr2_score(yT, psY, paY))
+        print('Ridge vs ARIMA SSVI p-val: ', cr2_score_pval(yT, psY, paY))
 
 
 if __name__ == '__main__':
