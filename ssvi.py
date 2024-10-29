@@ -40,7 +40,7 @@ def param_summary(params):
 
 
 def fitandforecastARIMA(Y, trend='n'):
-    def pacount(x, BREAK=0.29):
+    def pacount(x, BREAK=0.2):
         import numpy as np
         from statsmodels.tsa.stattools import pacf, acf
         pa = pacf(np.diff(x), nlags=10)
