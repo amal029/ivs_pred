@@ -545,14 +545,14 @@ def point_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs', learn="rid
                 train_vec = extract_features(train_vec, tY[:, i, j], model_name=model_name, TSTEPS=TSTEPS, type='point', dd=dd, otype=otype, m=s, t=t)
 
                 if dd == './gfigs':
-                    tosave = './point_feature_models/%s%s_ts_%s_%s_%s_%s_gfigs.pkl' % (model_name, TSTEPS, s, t, otype)
+                    tosave = './point_feature_models/%s%s_ts_%s_%s_%s_%s_gfigs.pkl' % (learn, model_name, TSTEPS, s, t, otype)
                 else:
-                    tosave = './point_feature_models/%s%s_ts_%s_%s_%s_%s.pkl' % (model_name, TSTEPS, s, t, otype)
+                    tosave = './point_feature_models/%s%s_ts_%s_%s_%s_%s.pkl' % (learn, model_name, TSTEPS, s, t, otype)
                 
                 # XXX: Check if learning model already exists
-                if os.path.isfile(tosave):
-                    print("Already Done")
-                    return 
+                # if os.path.isfile(tosave):
+                #     print("Already Done")
+                #     return 
 
                 # XXX: Add the moneyness and term structure to the sample set
                 k = np.array([s, t]*tX.shape[0]).reshape(tX.shape[0], 2)
@@ -625,53 +625,54 @@ if __name__ == "__main__":
         #                 p.start()
         #                 p.join()
 
-        for i in ['./figs', './gfigs']:
-            if n == 'call':
-                continue
-            for x in ['enet', 'lasso']:
-                for j in [5, 10, 20]:
-                    data = load_data(otype=n, dd=i, TSTEPS=j)
-                    for k in ['vae', 'pca']:
-                        print('Running for mskew pred: ', x, n, i, k, j)
-                        p = multiprocessing.Process(target=mskew_pred, args=(data, n, k, j, i, x))
-                        p.start()
-                        p.join()
-                        print("Done")
-
         # for i in ['./figs', './gfigs']:
-        #     for x in ['ridge']:
+        #     if n == 'call':
+        #         continue
+        #     for x in ['enet', 'lasso']:
         #         for j in [5, 10, 20]:
         #             data = load_data(otype=n, dd=i, TSTEPS=j)
-        #             for k in ['vae']:
-        #                 # print('Running for point pred: ', x, n, i, k, j)
-        #                 # point_pred(data, n, k, j, i, x)
-        #                 p = multiprocessing.Process(target=point_pred, args=(data, n, k, j, i, x))
+        #             for k in ['vae', 'pca']:
+        #                 print('Running for mskew pred: ', x, n, i, k, j)
+        #                 p = multiprocessing.Process(target=mskew_pred, args=(data, n, k, j, i, x))
         #                 p.start()
         #                 p.join()
+        #                 print("Done")
+
         for i in ['./figs', './gfigs']:
-            if n == 'call':
-                continue
             for x in ['enet', 'lasso']:
                 for j in [5, 10, 20]:
                     data = load_data(otype=n, dd=i, TSTEPS=j)
-                    for k in ['vae', 'pca']:
-                        print('Running for tskew pred: ', x, n, i, k, j)
-                        p = multiprocessing.Process(target=tskew_pred, args=(data, n, k, j, i, x))
-                        p.start()
-                        p.join()
-                        print("Done")
-                        # tskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
+                    for k in ['pca']:
+                        # print('Running for point pred: ', x, n, i, k, j)
+                        point_pred(data, n, k, j, i, x)
+                        # p = multiprocessing.Process(target=point_pred, args=(data, n, k, j, i, x))
+                        # p.start()
+                        # p.join()
+
+        # for i in ['./figs', './gfigs']:
+        #     if n == 'call':
+        #         continue
+        #     for x in ['enet', 'lasso']:
+        #         for j in [5, 10, 20]:
+        #             data = load_data(otype=n, dd=i, TSTEPS=j)
+        #             for k in ['vae', 'pca']:
+        #                 print('Running for tskew pred: ', x, n, i, k, j)
+        #                 p = multiprocessing.Process(target=tskew_pred, args=(data, n, k, j, i, x))
+        #                 p.start()
+        #                 p.join()
+        #                 print("Done")
+        #                 # tskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
   
 #         # For HAR 
         for i in ['./figs', './gfigs']:
             for x in ['enet', 'lasso']:
                 data = load_data(otype=n, dd=i, TSTEPS=21)
                 print('Running for all : ', x, n, i, 'har')
-                surf_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
-                print("Done surf")
-                tskew_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
-                print("Done tskew")
-                mskew_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
-                print("Done mskew")
-                # point_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
-                # print("Done point")
+                # surf_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
+                # print("Done surf")
+                # tskew_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
+                # print("Done tskew")
+                # mskew_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
+                # print("Done mskew")
+                point_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
+                print("Done point")
