@@ -165,4 +165,5 @@ cython_debug/
 *.keras
 *.npy.gz
 *.zip
+*.tar.gz
 prev_plots
