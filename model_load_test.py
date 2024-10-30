@@ -171,7 +171,7 @@ def extract_features(X, model, dd, TSTEPS, feature_res, m=0, t=0, type='mskew', 
         else:
             encoder = keras.saving.load_model(toopen, custom_objects={'VAE': fe.VAE, 'Sampling': fe.Sampling})
 
-        X = fe.autoencoder_transform(encoder, X, type=transform_type, vae=vae)
+        X = fe.autoencoder_transform(encoder, X, vae=vae)
     else:
         if type[1:] =='skew' or type == 'surf':
             # Reshape to 3D

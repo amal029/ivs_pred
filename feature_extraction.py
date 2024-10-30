@@ -20,6 +20,8 @@ import tensorflow as tf
 import keras
 # import multiprocessing
 
+from non_linear_models import SVM, LSTM
+
 import pred
 
 @keras.saving.register_keras_serializable()
@@ -130,7 +132,7 @@ class Autoencoder:
         # dataset = dataset.batch(1)
         # dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
         self.model.fit(tX, tX, epochs=epochs, batch_size=batch_size,
-                       shuffle=shuffle, validation_split=validation_split, callbacks=[reduce_lr, early_stopping], verbose=1)
+                       shuffle=shuffle, validation_split=validation_split, callbacks=[reduce_lr, early_stopping], verbose=0)
     
     def save(self, path):
         if self.vae:
@@ -196,7 +198,7 @@ class Autoencoder:
             encoder = Model(inputs=self.model.input, outputs=self.model.layers[1].output)
         return encoder.predict(valX)
 
-def autoencoder_transform(encoder , tX, type='skew', vae=False):
+def autoencoder_transform(encoder , tX, vae=False):
     # Strip the moneyness or term structure feature
     # if type == 'skew':
     #     structure = tX[:, -1:]
@@ -296,7 +298,7 @@ def extract_features(tX, tY, model_name='pca', TSTEPS=21, type='tskew', dd='./fi
                 tosave = './%s_feature_models/%s_ts_%s_%s_%s_%s_encoder.keras' % (type, model_name, TSTEPS, m, t,otype)
             else:
                 tosave = './%s_feature_models/%s_ts_%s_%s_%s_%s_encoder_gfigs.keras' % (type, model_name, TSTEPS, m, t,otype)
-        if type=='surf':
+        elif type=='surf':
             if dd == './figs':
                 tosave = './%s_feature_models/%s_ts_%s_%s_encoder.keras' % (type, model_name, TSTEPS, otype)
             else:
@@ -307,10 +309,9 @@ def extract_features(tX, tY, model_name='pca', TSTEPS=21, type='tskew', dd='./fi
             else:
                 tosave = './%s_feature_models/%s_ts_%s_%s_%s_encoder_gfigs.keras' % (type, model_name, TSTEPS, m, otype)
         
-        if os.path.exists(tosave):
+        if os.path.isfile(tosave):
             vae_encoder = keras.saving.load_model(tosave, custom_objects={'VAE': VAE, 'Sampling': Sampling})
-            vae_encoder.predict(tX)[2]
-
+            vae_encoder.predict(tX, verbose=0)[2]
         else:
             encoding_dim = TSTEPS//2 
 
@@ -330,6 +331,7 @@ def extract_features(tX, tY, model_name='pca', TSTEPS=21, type='tskew', dd='./fi
             tX = vae_encoder.predict(tX)[2]
 
             # Save encoder model
+            save = False
             if save:
                 vae_encoder.save(tosave)
                     
@@ -366,6 +368,10 @@ def regression_model(model="ridge"):
         return Lasso()
     elif model == "enet":
         return ElasticNet()
+    elif model == "svm":
+        return SVM()
+    elif model == "lstm":
+        return LSTM()
 
 def surf_pred(data, otype, model_name, TSTEPS, dd, learn="ridge"):
     if not os.path.exists('./surf_feature_models'):
@@ -509,6 +515,7 @@ def mskew_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs', learn="rid
                 pickle.dump(model, f)
 
 def point_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs', learn="ridge"):
+    print('Running point pred for: ', otype, model_name, TSTEPS, dd, learn)
     # Check if directory exists
     if not os.path.exists('./point_feature_models'):
         os.makedirs('./point_feature_models')
@@ -526,40 +533,54 @@ def point_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs', learn="rid
     tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP, pred.TSTEP)]
     mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
 
-    count = 0
     for i, s in enumerate(mms):
+        processes = [] 
         for j, t in enumerate(tts):
-            if count % 50 == 0:
-                print('Done: ', count)
-            count += 1
 
-            # Get the data for the given moneyness and term structure
-            train_vec = tX[:, :, i, j]
+            def func(i, j, s, t, tX, tY, model_name, TSTEPS, dd, otype, learn):
+                # Get the data for the given moneyness and term structure
+                train_vec = tX[:, :, i, j]
 
-            # Extract features
-            train_vec = extract_features(train_vec, tY[:, i, j], model_name=model_name, TSTEPS=TSTEPS, type='point', dd=dd, otype=otype, m=s, t=t)
+                # XXX: Extract features
+                train_vec = extract_features(train_vec, tY[:, i, j], model_name=model_name, TSTEPS=TSTEPS, type='point', dd=dd, otype=otype, m=s, t=t)
 
-            # XXX: Add the moneyness and term structure to the sample set
-            k = np.array([s, t]*tX.shape[0]).reshape(tX.shape[0], 2)
-            train_vec = np.append(train_vec, k, axis=1)
+                if dd == './gfigs':
+                    tosave = './point_feature_models/%s%s_ts_%s_%s_%s_%s_gfigs.pkl' % (model_name, TSTEPS, s, t, otype)
+                else:
+                    tosave = './point_feature_models/%s%s_ts_%s_%s_%s_%s.pkl' % (model_name, TSTEPS, s, t, otype)
+                
+                # XXX: Check if learning model already exists
+                if os.path.isfile(tosave):
+                    print("Already Done")
+                    return 
 
-            # Fit Regression model
-            reg = regression_model(learn)
-            reg.fit(train_vec, tY[:, i, j])
+                # XXX: Add the moneyness and term structure to the sample set
+                k = np.array([s, t]*tX.shape[0]).reshape(tX.shape[0], 2)
+                train_vec = np.append(train_vec, k, axis=1)
 
-            # Validate the model
-            # validation(train_vec, tY[:, i, j], reg)
+                # XXX: Fit Regression model
+                reg = regression_model(learn)
+                reg.fit(train_vec, tY[:, i, j])
 
-            # XXX: Save the model
-            import pickle
-            if dd != './gfigs':
-                with open('./point_feature_models/%s%s_ts_%s_%s_%s_%s.pkl' %
-                          (learn, model_name, TSTEPS, s, t, otype), 'wb') as f:
-                    pickle.dump(reg, f)
-            else:
-                with open('./point_feature_models/%s%s_ts_%s_%s_%s_%s_gfigs.pkl' %
-                          (learn, model_name, TSTEPS, s, t, otype), 'wb') as f:
-                    pickle.dump(reg, f)
+                # Validate the model
+                # validation(train_vec, tY[:, i, j], reg)
+
+                # XXX: Save the model
+                with open(tosave, 'wb') as f:
+                    pickle.dump(reg, f) 
+            
+            if len(processes) >= multiprocessing.cpu_count():
+                for p in processes:
+                    p.join()
+                processes = []
+
+            p = multiprocessing.Process(target=func, args=(i, j, s, t, tX, tY, model_name, TSTEPS, dd, otype, learn))
+            p.start()
+            processes.append(p)
+        for p in processes:
+            p.join()
+
+    print("Done")
 
 def run_all_models():
     for k in ['pca', 'autoencoder']:
@@ -579,6 +600,7 @@ if __name__ == "__main__":
     # model_name = 'vae'
     print("Starting")
     import multiprocessing
+    import concurrent.futures
 
 
     # Set environment variable to use cpu instead of gpu
@@ -591,53 +613,65 @@ if __name__ == "__main__":
     # tskew_pred(data, otype=otype, model_name=model_name, TSTEPS=TSTEPS, dd=dd)
     # point_pred(data, otype=otype, model_name=model_name, TSTEPS=TSTEPS, dd=dd)
     for n in ['call', 'put']:
+        
         # for i in ['./figs', './gfigs']:
-        #     for j in [20]:
-        #         data = load_data(otype=n, dd=i, TSTEPS=j)
-        #         for k in ['vae', 'pca', 'har']:
-        #             print('Running for surf: ', n, i)
-        #             surf_pred(data, n, k, j, i)
-                    # p = multiprocessing.Process(target=surf_pred, args=(data, n, k, j, i))
-                    # p.start()
-                    # p.join()
+        #     for x in ['enet', 'lasso']:
+        #         for j in [5, 10, 20]:
+        #             data = load_data(otype=n, dd=i, TSTEPS=j)
+        #             for k in ['vae', 'pca', 'har']:
+        #                 print('Running for surf: ', n, i)
+        #                 # surf_pred(data, n, k, j, i)
+        #                 p = multiprocessing.Process(target=surf_pred, args=(data, n, k, j, i))
+        #                 p.start()
+        #                 p.join()
+
         for i in ['./figs', './gfigs']:
+            if n == 'call':
+                continue
             for x in ['enet', 'lasso']:
                 for j in [5, 10, 20]:
                     data = load_data(otype=n, dd=i, TSTEPS=j)
                     for k in ['vae', 'pca']:
-                        print('Running for mskew: ', n, i, k, j)
+                        print('Running for mskew pred: ', x, n, i, k, j)
                         p = multiprocessing.Process(target=mskew_pred, args=(data, n, k, j, i, x))
                         p.start()
                         p.join()
+                        print("Done")
 
+        # for i in ['./figs', './gfigs']:
+        #     for x in ['ridge']:
+        #         for j in [5, 10, 20]:
+        #             data = load_data(otype=n, dd=i, TSTEPS=j)
+        #             for k in ['vae']:
+        #                 # print('Running for point pred: ', x, n, i, k, j)
+        #                 # point_pred(data, n, k, j, i, x)
+        #                 p = multiprocessing.Process(target=point_pred, args=(data, n, k, j, i, x))
+        #                 p.start()
+        #                 p.join()
         for i in ['./figs', './gfigs']:
+            if n == 'call':
+                continue
             for x in ['enet', 'lasso']:
                 for j in [5, 10, 20]:
                     data = load_data(otype=n, dd=i, TSTEPS=j)
                     for k in ['vae', 'pca']:
-                        print('Running for point: ', n, i, k, j)
-                        p = multiprocessing.Process(target=point_pred, args=(data, n, k, j, i, x))
-                        p.start()
-                        p.join()
-                        # point_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
-        
-        for i in ['./figs', './gfigs']:
-            for x in ['enet', 'lasso']:
-                for j in [5, 10, 20]:
-                    data = load_data(otype=n, dd=i, TSTEPS=j)
-                    for k in ['vae', 'pca']:
-                        print('Running for tskew: ', n, i, k, j)
+                        print('Running for tskew pred: ', x, n, i, k, j)
                         p = multiprocessing.Process(target=tskew_pred, args=(data, n, k, j, i, x))
                         p.start()
                         p.join()
+                        print("Done")
                         # tskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
   
-        # For HAR 
+#         # For HAR 
         for i in ['./figs', './gfigs']:
             for x in ['enet', 'lasso']:
                 data = load_data(otype=n, dd=i, TSTEPS=21)
-                print('Running for: ', n, i, 'har')
+                print('Running for all : ', x, n, i, 'har')
                 surf_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
-                tskew_pred(otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
-                mskew_pred(otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
-                point_pred(otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
+                print("Done surf")
+                tskew_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
+                print("Done tskew")
+                mskew_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
+                print("Done mskew")
+                # point_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
+                # print("Done point")
