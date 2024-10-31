@@ -40,38 +40,83 @@ def param_summary(params):
     plt.show(block=False)
 
 
-def fitandforecastARIMA(Y, trend='n'):
-    def pacount(x, BREAK=0.2):
-        import numpy as np
-        from statsmodels.tsa.stattools import pacf, acf
-        pa = pacf(np.diff(x), nlags=10)
-        pcount = 0
-        for i in pa[1:]:
-            if np.abs(i) < BREAK:
-                break
-            pcount += 1
-        # pcount = 1 if pacount == 0 else pcount
+def pacount(x, BREAK=0.1, var=False):
+    import numpy as np
+    from statsmodels.tsa.stattools import pacf, acf
+    xd = np.diff(x)
+    if not var:
+        pa = pacf(xd, nlags=10)
+    else:
+        pa = pacf(xd**2, nlags=10)
+    pcount = 0
+    for i in pa[1:]:
+        if np.abs(i) < BREAK:
+            break
+        pcount += 1
 
-        aa = acf(np.diff(x), nlags=10)
-        acount = 0
-        for i in aa[1:]:
-            if np.abs(i) < BREAK:
-                break
-            acount += 1
-        # acount = 1 if acount == 0 else acount
+    if not var:
+        aa = acf(xd, nlags=10)
+    else:
+        aa = acf(xd**2, nlags=10)
+    acount = 0
+    for i in aa[1:]:
+        if np.abs(i) < BREAK:
+            break
+        acount += 1
 
-        return pcount, acount
+    return pcount, acount
+
+
+def fitandforecastARIMA(Y, trend='n', N=1000000):
 
     Y = Y.values.reshape(Y.shape[0],)
-    rp, ra = pacount(Y)
+    rpm, ram = pacount(Y, BREAK=0.1)
 
-    SCALE = 10
+    SCALE = 1
+    dY = np.diff(Y)
     from statsmodels.tsa.statespace.sarimax import SARIMAX
-    model_fit = SARIMAX(Y*SCALE, order=(rp, 1, ra), trend=trend,
+    # XXX: ARMA on differenced series
+    # df = rpm + ram
+    model_fit = SARIMAX(dY*SCALE, order=(rpm, 0, ram), trend=trend,
                         ).fit(maxiter=10000, disp=False,
-                              method='bfgs')
-    ret = model_fit.forecast(steps=1)[0]/SCALE
-    return ret
+                              method='lbfgs')
+    # XXX: This is the mean of the model
+    retmean = model_fit.forecast(steps=1)[0]/SCALE
+
+    # XXX: The residual fitting
+    from arch.univariate import ZeroMean, GARCH, StudentsT
+    # XXX: AR on differenced series
+    rp, ra = pacount(Y, BREAK=0.1, var=True)
+    rp = 1 if rp <= 0 else rp
+    ra = 1 if ra <= 0 else ra
+    vol_model = GARCH(p=ra, q=rp)
+    model_fit = ZeroMean(model_fit.resid, volatility=vol_model,
+                         rescale=True, distribution=StudentsT())
+    model_fit = model_fit.fit(update_freq=0, disp='off',
+                              options={'maxiter': 10000})
+    SCALE = model_fit.scale
+    retvar = (model_fit.forecast(horizon=1).variance.iloc[0, 0] /
+              np.power(SCALE, 2))**0.5
+
+    # XXX: We have removed auto-corellation, but the std_resid still
+    # have kurtosis -- so use a StudentsT distribution.
+
+    # XXX: Total return for the shifted and scaled normal distribution
+    ret = np.mean(retmean + retvar *
+                  np.random.standard_t(df=model_fit.params['nu'], size=N))
+    # ret = np.mean(np.random.normal(loc=retmean, scale=retvar, size=N))
+
+    # from statsmodels.stats.diagnostic import acorr_ljungbox
+    # ress = acorr_ljungbox(model_fit.std_resid, model_df=df)
+    # print('correlation: ', ress)
+    # from statsmodels.stats.stattools import jarque_bera
+    # jb, jbp, skew, kur = jarque_bera(model_fit.std_resid)
+    # print('JB stat:%s, JBp-val:%s, skew:%s, kurtosis:%s' %
+    #       (jb, jbp, skew, kur))
+    # plt.hist(model_fit.std_resid, bins=100)
+    # plt.show()
+
+    return ret + Y[-1]
 
 
 def doARIMA(params, WINDOW):
@@ -220,10 +265,6 @@ def main():
         ssvi = SSVI('ssviridge', TSTEP)
         params, ATM_IV = ssvi.fitY(X['IVS'])
 
-        # XXX: Ridge fit (VAR model)
-        prY = doRidge(X, WINDOW, TSTEP=TSTEP)
-        print('R2 score Ridge: ', r2_score(yT, prY))
-
         # XXX: Get the ATM_IV predictions
         pY = doATMIV(ATM_IV, WINDOW, TSTEP=TSTEP)
         print(ATM_IV[WINDOW:].shape, pY.shape)
@@ -242,6 +283,10 @@ def main():
         paY = np.array(paY)
         paY = paY.reshape(paY.shape[0], paY.shape[1]*paY.shape[2])
         print('R2 score ARIMA: ', r2_score(yT, paY))
+
+        # XXX: Ridge fit (VAR model)
+        prY = doRidge(X, WINDOW, TSTEP=TSTEP)
+        print('R2 score Ridge: ', r2_score(yT, prY))
 
         # XXX: Fit using the standard technique
         psY = doSSVI(X, WINDOW, TSTEP=TSTEP)
