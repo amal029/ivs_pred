@@ -3,7 +3,7 @@
 import pandas as pd
 import os
 import fnmatch
-import zipfile as zip
+import zipfile as mzip
 from sklearn.linear_model import LinearRegression
 from sklearn.linear_model import Lasso, Ridge, ElasticNet
 from sklearn.multioutput import MultiOutputRegressor
@@ -20,12 +20,18 @@ from keras.models import Model
 from sklearn.metrics import root_mean_squared_error
 from sklearn.metrics import mean_absolute_percentage_error
 from sklearn.metrics import r2_score
+# from sklearn.utils.validation import check_array, FLOAT_DTYPES
+from sklearn.utils.validation import check_is_fitted
 import keras
 # from PIL import Image
 # XXX: For plotting only
 import matplotlib.pyplot as plt
 # from sklearn.linear_model import SGDRegressor
-from sklearn.cross_decomposition import PLSRegression
+from sklearn.cross_decomposition import PLSSVD
+from scipy.stats import norm
+# from scipy.optimize import curve_fit
+from scipy.stats import ttest_1samp
+from scipy.optimize import minimize
 
 # XXX: Moneyness Bounds inclusive
 LM = 0.9
@@ -38,6 +44,524 @@ UT = 366
 TSTEP = 5                       # days
 
 DAYS = 365
+
+
+def cr2_score_pval(ytrue, y1, y2, greater=True):
+    """ytrue: The true series
+    y1: prediction 1: (sample, len(moneyness)*len(termstructure)).
+    This should be one model that you want to compare against.
+
+    y2: prediction 2: (sample, len(moneyness)*len(termstructure)). This
+    is the second model that you want to compare against.
+
+    """
+    f = np.sum((ytrue - y1)**2, axis=1)
+    s = np.sum((ytrue - y2)**2 - (y2 - y1)**2, axis=1)
+    v = f - s
+    if greater:
+        resg = ttest_1samp(v, 0.0, alternative='greater')
+    else:
+        resg = ttest_1samp(v, 0.0)
+    return resg.pvalue
+
+
+def cr2_score(ytrue, y1, y2):
+    """Own r2score from paper: Are there gains from using information
+    over the surface of implied volatilies?
+    ytrue: true time series
+    y1: prediction from model 1(benchmark to compare against)
+    y2  prediction from model 2
+
+    """
+    assert (ytrue.shape == y1.shape)
+    assert (ytrue.shape == y2.shape)
+    assert (len(ytrue.shape) == 2)
+    num = np.sum((ytrue - y2)**2)
+    den = np.sum((ytrue - y1)**2)
+    return 1 - (num/den)
+
+
+# XXX: Curve fit to get the average (expected lambda)
+def ym(m, b0, b1, b2, lam):
+    return (b0 +
+            b1*((1-np.exp(-lam*m))/(lam*m)) +
+            b2*(((1-np.exp(-lam*m))/(lam*m))-np.exp(-lam*m)))
+
+
+# XXX: The class to perform Nelson-Siegel prediction of term structure
+class NS:
+    def __init__(self, xdf, TSTEPS, model):
+        if model == 'tsknsridge' or model == 'msknsridge':
+            self.reg = Ridge()
+        elif model == 'tsknslasso' or model == 'msknslasso':
+            self.reg = Lasso()
+        elif model == 'tsknsenet' or model == 'msknsenet':
+            self.reg = ElasticNet()
+        self.xdf = xdf
+        self.TSTEPS = TSTEPS
+
+    def _getcoefs(self, vec, y=None):
+        vec = vec[:, :-1]
+        vec = vec.reshape(vec.shape[0], self.TSTEPS,
+                          vec.shape[1]//self.TSTEPS)
+
+        # XXX: There are 3 coefficients in the latent NS space
+        def ffit(i):
+            res = list()
+            for j in range(vec.shape[1]):
+                lreg = LinearRegression(n_jobs=-1).fit(self.xdf, vec[i, j])
+                res += [lreg.coef_[0], lreg.coef_[1], lreg.intercept_]
+            return res
+
+        # XXX: For each sample and each lag convert to latent NS space.
+        from joblib import Parallel, delayed
+        res = Parallel(n_jobs=-1)(delayed(ffit)(i)
+                                  for i in range(vec.shape[0]))
+        xcoefs = np.array(res)
+        if y is not None:
+            ycoefs = np.array([1.0]*y.shape[0]*3).reshape(y.shape[0], 3)
+            # XXX: Get the betas for the output too!
+            for i in range(y.shape[0]):
+                lreg = LinearRegression().fit(self.xdf, y[i])
+                ycoefs[i] = [lreg.coef_[0], lreg.coef_[1], lreg.intercept_]
+            return xcoefs, ycoefs
+        else:
+            return xcoefs
+
+    def fit(self, vec, y):
+        # XXX: Fit the model for x to y coefficients
+        xcoefs, ycoefs = self._getcoefs(vec, y)
+        self.reg = self.reg.fit(xcoefs, ycoefs)
+        return self.reg
+
+    def _predict(self, pycoefs):
+        yp = np.array([1.0]*pycoefs.shape[0]*self.xdf.shape[0]).reshape(
+            pycoefs.shape[0], self.xdf.shape[0])
+        for i in range(pycoefs.shape[0]):
+            yp[i] = np.dot(self.xdf, pycoefs[i, :2]) + pycoefs[i, 2]
+        return yp
+
+    def score(self, vec, y):
+        check_is_fitted(self.reg)
+        xcoefs = self._getcoefs(vec)
+        pycoefs = self.reg.predict(xcoefs)
+        yp = self._predict(pycoefs)
+        return r2_score(y, yp)
+
+    def predict(self, vec):
+        # XXX: Predit the output given the input
+        xcoefs = self._getcoefs(vec)
+        pycoefs = self.reg.predict(xcoefs)
+        return self._predict(pycoefs)
+
+
+# XXX: The class to perform pls based regression
+class MPls:
+    def __init__(self, n_components, intercept, t='plsridge'):
+        self.__n_components = n_components
+        self._reg_svd = PLSSVD(n_components=n_components)
+        self.xmean = 0
+        self.ymean = 0
+        self.xstd = 0
+        self.ystd = 0
+        if (t == 'plsridge' or t == 'pmplsridge' or t == 'mskplsridge' or (
+                t == 'tskplsridge')):
+            # print('Doing %s' % t)
+            self._reg = Ridge(fit_intercept=intercept)
+        elif t == 'plslasso' or t == 'pmplslasso' or t == 'mskplslasso' or (
+                t == 'tskplslasso'):
+            # print('Doing %s' % t)
+            self._reg = Lasso(fit_intercept=intercept)
+        elif t == 'plsenet' or t == 'pmplsenet' or t == 'mskplsenet' or (
+                t == 'tskplsenet'):
+            # print('Doing %s' % t)
+            self._reg = ElasticNet(fit_intercept=intercept)
+
+    def _center_scale_xy(self, X, Y, scale=True):
+        # print(X.shape, Y.shape)
+        # center
+        x_mean = X.mean(axis=0)
+        X -= x_mean
+        y_mean = Y.mean(axis=0)
+        Y -= y_mean
+        # scale
+        if scale:
+            x_std = X.std(axis=0, ddof=1)
+            x_std[x_std == 0.0] = 1.0
+            X /= x_std
+            y_std = Y.std(axis=0, ddof=1)
+            if type(y_std) is not np.float64:
+                y_std[y_std == 0.0] = 1.0
+            else:
+                y_std = 1.0 if y_std == 0.0 else y_std
+                Y /= y_std
+        else:
+            x_std = np.ones(X.shape[1])
+            y_std = np.ones(Y.shape[1])
+        return x_mean, y_mean, x_std, y_std
+
+    def fit(self, tX, tY):
+        (self.xmean, self.ymean,
+         self.xstd, self.ystd) = self._center_scale_xy(np.copy(tX),
+                                                       np.copy(tY))
+        tXX, tYY = self._reg_svd.fit_transform(tX, tY)
+        # print(tXX.shape, tYY.shape)
+        self._reg = self._reg.fit(tXX, tYY)
+        # print('Ridge r2: ', self._reg.score(tXX, tYY))
+        # tXX = check_array(tXX, input_name='X', dtype=FLOAT_DTYPES)
+        # tXX1 = tXX @ self._reg_svd.x_weights_.T * self.xstd + self.xmean
+        # tYY = check_array(tYY, input_name='y', dtype=FLOAT_DTYPES)
+        # tYY1 = tYY @ self._reg_svd.y_weights_.T * self.ystd + self.ymean
+        # print('X SVD r2: ', r2_score(tX, tXX1))
+        # print('Y SVD r2: ', r2_score(tY, tYY1))
+        return self
+
+    def predict(self, tX):
+        tXX = self._reg_svd.transform(tX)
+        check_is_fitted(self._reg_svd)
+        check_is_fitted(self._reg)
+        # print(tXX.shape)
+        vYY = self._reg.predict(tXX)
+        # print(vYY.shape)
+        # vY = vYY @ self._reg_svd.y_weights_.T * self.ystd + self.ymean
+        vYY = vYY.reshape(vYY.shape[0], self._reg_svd.y_weights_.T.shape[0])
+        vY = np.dot(vYY, self._reg_svd.y_weights_.T) * self.ystd + self.ymean
+        return vY
+
+    def score(self, tX, tY):
+        tXX = self._reg_svd.transform(tX)
+        vYY = self._reg.predict(tXX)
+        vYY = vYY.reshape(vYY.shape[0], self._reg_svd.y_weights_.T.shape[0])
+        vY = np.dot(vYY, self._reg_svd.y_weights_.T) * self.ystd + self.ymean
+        return r2_score(tY, vY)
+
+
+# XXX: Chalamandaris and Tsekrekos (2015) model
+class CT:
+    def __init__(self, model, mms, TTS, TSTEPS, LAMBDA=0.0147):
+        self.TSTEPS = TSTEPS
+        self.MMS = len(mms)
+        self.TTS = len(TTS)
+        # XXX: Make the data frame for fitting
+        self.df = pd.DataFrame({'m': np.array([[m]*len(TTS)
+                                               for m in mms]).reshape(
+                                                       len(mms)*len(TTS)),
+                                't': np.array(TTS*len(mms))})
+        self.df['mlt1'] = (self.df['m'] < 1.0).astype(int, copy=False)
+        self.df['mgeq1'] = (self.df['m'] >= 1.0).astype(int, copy=False)
+        self.df['m2'] = self.df['m']**2
+        self.df['mt'] = self.df['m']*self.df['t']
+        # XXX: The required model values
+        self.df['b0'] = 1
+        self.df['b1'] = self.df['m2']*self.df['mgeq1']
+        self.df['b2'] = self.df['m2']*self.df['mlt1']
+        texp = (self.df['t']*-LAMBDA).apply(np.exp)
+        lt = self.df['t']*LAMBDA
+        self.df['b3'] = (1 - texp)/lt
+        self.df['b4'] = self.df['b3'] - texp
+        self.df['b5'] = self.df['mgeq1']*self.df['mt']
+        self.df['b6'] = self.df['mlt1']*self.df['mt']
+
+        if model == 'ctridge':
+            self.reg = Ridge()
+        elif model == 'ctlasso':
+            self.reg = Lasso()
+        elif model == 'ctenet':
+            self.reg = ElasticNet()
+
+    def fitX(self, X, features):
+        # XXX: Do this TSTEPS time
+        res = list()
+        for i in range(X.shape[0]):
+            lreg = LinearRegression(n_jobs=-1,
+                                    fit_intercept=False).fit(features,
+                                                             X[i])
+            res.append(lreg.coef_)
+        return np.array(res)
+
+    def fitY(self, Y, features):
+        lreg = LinearRegression(n_jobs=-1,
+                                fit_intercept=False).fit(features, Y)
+        return lreg.coef_
+
+    def fit(self, tX, tY):
+        tX = tX.reshape(tX.shape[0], self.TSTEPS, self.MMS*self.TTS)
+        tY = tY.reshape(tX.shape[0], self.MMS*self.TTS)
+        features = self.df[['b0', 'b1', 'b2', 'b3', 'b4', 'b5', 'b6']]
+        from joblib import Parallel, delayed
+        resY = np.array(Parallel(n_jobs=-1)(delayed(self.fitY)(tY[i], features)
+                                            for i in range(tY.shape[0])))
+        # XXX: Fit the X
+        resX = np.array(Parallel(n_jobs=-1)(delayed(self.fitX)(tX[i], features)
+                                            for i in range(tX.shape[0])))
+        resX = resX.reshape(resX.shape[0], resX.shape[1]*resX.shape[2])
+
+        # XXX: Now fit the coefficients learning model
+        self.reg.fit(resX, resY)
+        return self
+
+    def score(self, tX, tY):
+        check_is_fitted(self.reg)
+        tX = tX.reshape(tX.shape[0], self.TSTEPS, self.MMS*self.TTS)
+        tY = tY.reshape(tX.shape[0], self.MMS*self.TTS)
+        features = self.df[['b0', 'b1', 'b2', 'b3', 'b4', 'b5', 'b6']]
+        from joblib import Parallel, delayed
+        # XXX: Fit the X
+        resX = np.array(Parallel(n_jobs=-1)(delayed(self.fitX)(tX[i], features)
+                                            for i in range(tX.shape[0])))
+        resX = resX.reshape(resX.shape[0], resX.shape[1]*resX.shape[2])
+        # XXX: Predict the next day' coefficients
+        presY = self.reg.predict(resX)
+        # XXX: do a dot product to get the pY
+        pY = np.dot(presY, features.T)
+        return r2_score(tY, pY)
+
+    def predict(self, tX):
+        check_is_fitted(self.reg)
+        tX = tX.reshape(tX.shape[0], self.TSTEPS, self.MMS*self.TTS)
+        pass
+        features = self.df[['b0', 'b1', 'b2', 'b3', 'b4', 'b5', 'b6']]
+        from joblib import Parallel, delayed
+        # XXX: Fit the X
+        resX = np.array(Parallel(n_jobs=-1)(delayed(self.fitX)(tX[i], features)
+                                            for i in range(tX.shape[0])))
+        resX = resX.reshape(resX.shape[0], resX.shape[1]*resX.shape[2])
+        # XXX: Predict the next day' coefficients
+        presY = self.reg.predict(resX)
+        # XXX: do a dot product to get the pY
+        pY = np.dot(presY, features.T)
+        return pY
+
+
+# XXX: The static arb free (risk neutral measure) fit called surface
+# stochastic volatility inspired (SSVI) by Gatheral 2013.
+class SSVI:
+    # SSVI
+    def SSVI(self, theta, T, rho, nu):
+        phi = nu / (theta**0.5)  # power law
+        result = (0.5 * theta) * (1 + rho * phi * self.k +
+                                  np.sqrt((phi * self.k + rho)**2 +
+                                          1 - rho**2))
+        return np.sqrt(result/T)
+
+    def __init__(self, model, TSTEPS):
+        self.isfitted = False
+        self.bnds = [(-1+1e-6, 1-1e-6), (0+1e-6, np.inf)]
+        # self.cons2 = [{'type': 'ineq', 'fun': self.Heston_condition}]
+        self.mms = np.arange(LM, UM+MSTEP, MSTEP)
+        self.tts = np.array([i/365 for i in range(LT, UT+TSTEP, TSTEP)])
+        self.k = np.log(self.mms)         # log moneyness
+        self.MMS = self.mms.size
+        self.TTS = self.tts.size
+        self.TSTEPS = TSTEPS
+        self.atmi = np.where(np.isclose(self.mms, 0.9999))[0][0]
+
+        # XXX: The models
+        if model == 'ssviridge':
+            self.reg = Ridge()
+        elif model == 'ssvilasso':
+            self.reg = Lasso()
+        elif model == 'ssvienet':
+            self.reg = ElasticNet()
+
+        # XXX: For predicting the ATM IV
+        self.atmreg = Ridge()
+
+    # XXX: Fit for a given Day
+    def fitADay(self, params, Y):
+        rho, nu = params
+        THETAS = Y[self.atmi]**2*self.tts
+        pY = list()
+        # XXX: Go slice by slice
+        for ti, T in enumerate(self.tts):
+            theta = THETAS[ti]
+            pY.append(self.SSVI(theta, T, rho, nu))
+        # XXX: Now do a transpose of res
+        pY = np.array(pY).T
+        # XXX: Now do a sum of square differences
+        return np.sum((Y - pY)**2)
+
+    def fitY(self, tY):
+        from joblib import Parallel, delayed
+        res = Parallel(n_jobs=-1)(
+            delayed(minimize)(self.fitADay,
+                              x0=[0.4, 0.1],
+                              args=(tY[i]),
+                              bounds=self.bnds,
+                              method='COBYQA',
+                              options={'disp': False})
+            for i in range(tY.shape[0]))
+
+        # XXX: Add the target THETAS for prediciting the ATM IV
+        tthetas = list()
+        for y in tY:
+            tthetas.append(y[self.atmi])
+
+        # XXX: These are the targets for predicting
+        res = np.array([[i.x[0], i.x[1]] for i in res])
+        return res, np.array(tthetas)
+
+    def fitX(self, tX):
+        def __fitX(D):
+            res = list()
+            for d in D:
+                m = minimize(self.fitADay, x0=[0.4, 0.1], args=(d),
+                             bounds=self.bnds,
+                             method='COBYQA',
+                             options={'disp': False})
+                m = [m.x[0], m.x[1]]
+                res.append(m)
+            return res
+
+        from joblib import Parallel, delayed
+        res = Parallel(n_jobs=-1)(delayed(__fitX)(tX[i])
+                                  for i in range(tX.shape[0]))
+        fthetas = list()
+        for x in tX:
+            thetas = list()
+            for x1 in x:
+                thetas.append(x1[self.atmi])
+            fthetas.append(thetas)
+
+        return np.array(res), np.array(fthetas)
+
+    def check_is_fitted(self):
+        return self.isfitted
+
+    def fit(self, tX, tY):
+        tX = tX.reshape(tX.shape[0], self.TSTEPS, self.MMS, self.TTS)
+        tY = tY.reshape(tX.shape[0], self.MMS, self.TTS)
+
+        # XXX: Fit the features
+        features, fthetas = self.fitX(tX)
+        features = features.reshape(features.shape[0],
+                                    features.shape[1]*features.shape[2])
+
+        # XXX: Fit the targets
+        targets, tthetas = self.fitY(tY)
+
+        # from statsmodels.graphics.tsaplots import plot_pacf
+        # plot_pacf(features[:, 0])
+        # plt.show()
+
+        # XXX: Fit the model -- this score is very low!
+        self.reg = self.reg.fit(features, targets)
+        # print('reg score: ', self.reg.score(features, targets))
+
+        # XXX: Fit the theta prediction model
+        fthetas = fthetas.reshape(fthetas.shape[0],
+                                  fthetas.shape[1]*fthetas.shape[2])
+        self.atmreg = self.atmreg.fit(fthetas, tthetas)
+        # print('atm score: ', self.atmreg.score(fthetas, tthetas))
+        # XXX: I am now fitted
+        self.isfitted = True
+        return self
+
+    def score(self, tX, tY):
+        pY = self.predict(tX)
+        return r2_score(tY, pY)
+
+    def predict1(self, params, THETAS):
+        rho, nu = params[0], params[1]
+        THETAS = THETAS**2*self.tts
+        pY = list()
+        for ti, T in enumerate(self.tts):
+            theta = THETAS[ti]
+            pY.append(self.SSVI(theta, T, rho, nu))
+        pY = np.array(pY).T
+        return pY
+
+    def predict(self, tX):
+        tX = tX.reshape(tX.shape[0], self.TSTEPS, self.MMS, self.TTS)
+        features, fthetas = self.fitX(tX)
+        features = features.reshape(features.shape[0],
+                                    features.shape[1]*features.shape[2])
+        check_is_fitted(self.reg)
+        pftargets = self.reg.predict(features)
+        check_is_fitted(self.atmreg)
+        pttargets = self.atmreg.predict(fthetas.reshape(fthetas.shape[0],
+                                                        (fthetas.shape[1] *
+                                                         fthetas.shape[2])))
+        from joblib import Parallel, delayed
+        pY = Parallel(n_jobs=-1)(
+            delayed(self.predict1)(pftargets[i], pttargets[i])
+            for i in range(pttargets.shape[0]))
+        pY = np.array(pY)
+        pY = pY.reshape(pY.shape[0], pY.shape[1]*pY.shape[2])
+        return pY
+
+
+def getr(row, mk):
+    """otype: the type of option
+       row: row of the dataframe
+       row[delta]: the delta greek
+       row[tau]: the time to expiry (days left)/365
+       row[S]: current underlying price
+       row[K]: strike price
+       row[sigma]: volatility
+    return: risk free interest rate
+    """
+
+    delta = row['Delta']
+    sigma = row['IV']
+    t = row['tau']
+    S = row['UnderlyingPrice']
+    K = row['Strike']
+    otype = row['Type']
+
+    if otype == 'call':
+        d1 = norm.ppf(delta)
+    else:
+        d1 = norm.ppf(1 + delta)
+        # XXX: Now compute the interest rate
+    r = ((d1 * sigma * np.sqrt(t)) - np.log(S/K))/t - (sigma**2/2)
+    # XXX: DEBUG
+    dd1 = 1/(sigma*np.sqrt(t)) * (np.log(S/K) + (r + sigma**2/2)*t)
+    if otype == 'call':
+        if not np.isclose(delta, norm.cdf(dd1)):
+            print('call:', delta, norm.cdf(dd1), mk)
+            print('d1:', d1)
+            print(row)
+    else:
+        if not np.isclose(delta, norm.cdf(dd1)-1):
+            print('put: ', delta, norm.cdf(dd1)-1, mk)
+            print('d1:', d1)
+            print(row)
+    return r
+
+
+# XXX: 20220322 has a number of nans
+def interest_rates(dfs: dict):
+    for k in dfs.keys():
+        df = dfs[k]
+        # XXX: First only get those that have volume > 0
+        df = df[df['Volume'] > 0].reset_index(drop=True)
+        # XXX: Make the log of K/UnderlyingPrice
+        df['m'] = (df['Strike']/df['UnderlyingPrice'])
+        # XXX: Moneyness is not too far away from ATM
+        df = df[(df['m'] >= LM) & (df['m'] <= UM)]
+        # XXX: Make the days to expiration
+        df['Expiration'] = pd.to_datetime(df['Expiration'])
+        df['DataDate'] = pd.to_datetime(df['DataDate'])
+        df['tau'] = (df['Expiration'] - df['DataDate']).dt.days
+        # XXX: Only those that are greater than at least 2 weeks ahead
+        # and also not too ahead
+        df = df[(df['tau'] >= LT) & (df['tau'] <= UT)]
+        df['tau'] = df['tau']/DAYS
+
+        # XXX: implied volatility is not zero!
+        df = df[df['IV'] != 0]
+
+        # XXX: Compute the interest rates
+        dfr = df[['Delta', 'tau', 'UnderlyingPrice', 'Strike', 'IV', 'Type']]
+        df['InterestR'] = dfr.apply(lambda d: getr(d, k), axis=1)
+        df['ForwardP'] = df['UnderlyingPrice']*np.exp(
+            df['InterestR']*df['tau'])
+        df['Mid'] = (df['Ask'] + df['Bid'])/2
+        # XXX: Numpy array
+        dfr = df.drop(['AKA', 'Exchange'], axis=1)
+        dfr = dfr.reset_index(drop=True)
+        dfr.to_csv('./interest_rates/%s.csv' % (k))
 
 
 def preprocess_ivs_df(dfs: dict, otype):
@@ -62,7 +586,6 @@ def preprocess_ivs_df(dfs: dict, otype):
         df['m2'] = df['m']**2
         df['tau2'] = df['tau']**2
         df['mtau'] = df['m']*df['tau']
-
         # XXX: This is the final dataframe
         dff = df[['IV', 'm', 'tau', 'm2', 'tau2', 'mtau']]
         toret[k] = dff.reset_index(drop=True)
@@ -219,10 +742,9 @@ def main(mdir, years, months, instrument, dfs: dict):
                     # print(ff)
                     # XXX: Read the csvs
     for f in ff:
-        z = zip.ZipFile(mdir+f)
+        z = mzip.ZipFile(mdir+f)
         ofs = [i for i in z.namelist() if 'options_' in i]
         # print(ofs)
-        # assert (1 == 2)
         # XXX: Now read just the option data files
         for f in ofs:
             key = f.split(".csv")[0].split("_")[2]
@@ -350,12 +872,15 @@ def build_gird_and_images(df, otype):
     # plot_ivs(ivs_surface, view='XY')
 
 
-def excel_to_images(dvf=True, otype='call'):
+def excel_to_images(dvf=True, otype='call', ironly=False):
     dir = '../../HistoricalOptionsData/'
     years = [str(i) for i in range(2002, 2024)]
-    months = ['January', 'February',  'March', 'April', 'May', 'June', 'July',
-              'August', 'September', 'October', 'November', 'December'
-              ]
+    months = [
+        'January', 'February',
+        'March',
+        'April', 'May', 'June', 'July',
+        'August', 'September', 'October', 'November', 'December'
+    ]
     instrument = ["SPX"]
     dfs = dict()
     # XXX: The dictionary of all the dataframes with the requires
@@ -364,15 +889,18 @@ def excel_to_images(dvf=True, otype='call'):
         # XXX: Load the excel files
         main(dir, years, months, i, dfs)
 
-        # XXX: Now make ivs surface for each instrument
-        df = preprocess_ivs_df(dfs, otype)
-
-        if dvf:
-            # XXX: Build the 2d matrix with DVF
-            build_gird_and_images(df, otype)
+        if ironly:
+            interest_rates(dfs)
         else:
-            # XXX: Build the 2d matrix with NW
-            build_gird_and_images_gaussian(df, otype)
+            # XXX: Now make ivs surface for each instrument
+            df = preprocess_ivs_df(dfs, otype)
+
+            if dvf:
+                # XXX: Build the 2d matrix with DVF
+                build_gird_and_images(df, otype)
+            else:
+                # XXX: Build the 2d matrix with NW
+                build_gird_and_images_gaussian(df, otype)
 
 
 def build_keras_model(shape, inner_filters, bs, LR=1e-3):
@@ -541,25 +1069,25 @@ def plot_predicted_outputs_reg(vY, vYP, TSTEPS):
         for cm, m in enumerate(MS):
             for ct, t in enumerate(TS):
                 ydf.append([m, t, y[cm, ct]])
-        ydf = np.array(ydf)
-        axs[0].plot_trisurf(ydf[:, 0], ydf[:, 1], ydf[:, 2],
-                            cmap='afmhot', linewidth=0.2,
-                            antialiased=True)
-        axs[0].set_xlabel('Moneyness')
-        axs[0].set_ylabel('Term structure')
-        axs[0].set_zlabel('Vol %')
-        axs[1].title.set_text('Predicted')
-        ypdf = list()
+                ydf = np.array(ydf)
+                axs[0].plot_trisurf(ydf[:, 0], ydf[:, 1], ydf[:, 2],
+                                    cmap='afmhot', linewidth=0.2,
+                                    antialiased=True)
+                axs[0].set_xlabel('Moneyness')
+                axs[0].set_ylabel('Term structure')
+                axs[0].set_zlabel('Vol %')
+                axs[1].title.set_text('Predicted')
+                ypdf = list()
         for cm, m in enumerate(MS):
             for ct, t in enumerate(TS):
                 ypdf.append([m, t, yp[cm, ct]])
-        ypdf = np.array(ypdf)
-        axs[1].plot_trisurf(ypdf[:, 0], ypdf[:, 1], ypdf[:, 2],
-                            cmap='afmhot', linewidth=0.2,
-                            antialiased=True)
-        axs[1].set_xlabel('Moneyness')
-        axs[1].set_ylabel('Term structure')
-        axs[1].set_zlabel('Vol %')
+                ypdf = np.array(ypdf)
+                axs[1].plot_trisurf(ypdf[:, 0], ypdf[:, 1], ypdf[:, 2],
+                                    cmap='afmhot', linewidth=0.2,
+                                    antialiased=True)
+                axs[1].set_xlabel('Moneyness')
+                axs[1].set_ylabel('Term structure')
+                axs[1].set_zlabel('Vol %')
 
         plt.show()
         plt.close()
@@ -635,10 +1163,25 @@ def regression_predict(otype, dd='./figs', model='Ridge', TSTEPS=10):
                              n_estimators=100,
                              verbosity=2))
 
-    if model == 'pls':
-        tokeep = cca_comps(tX, tY, N_COMP=10)
-        treg = 'pls'
-        reg = PLSRegression(n_components=tokeep)
+    if model == 'plsridge' or model == 'plslasso' or model == 'plsenet':
+        if dd != './gfigs':
+            tokeep = cca_comps(tX, tY)
+        else:
+            tokeep = cca_comps(tX, tY, N_COMP=20)
+            # XXX: Get the score and predict using scores then get it back
+        treg = model
+        reg = MPls(tokeep, intercept, model)
+
+    if model == 'ctridge' or model == 'ctlasso' or model == 'ctenet':
+        mms = np.arange(LM, UM+MSTEP, MSTEP)
+        TTS = [i for i in range(LT, UT+TSTEP, TSTEP)]
+        reg = CT(model, mms, TTS, TSTEPS)
+        treg = model
+
+    if model == 'ssviridge' or model == 'ssvilasso' or model == 'ssvienet':
+        treg = model
+        reg = SSVI(model, TSTEPS)
+
     reg.fit(tX, tY)
     print('Train set R2: ', reg.score(tX, tY))
 
@@ -737,10 +1280,30 @@ def mskew_pred(otype, dd='./figs', model='mskridge', TSTEPS=5):
 
     count = 0
 
+    # XXX: First get the LAMBDA
+    if model == 'msknsridge' or model == 'msknslasso' or model == 'msknsenet':
+        mms = np.arange(LM, UM+MSTEP, MSTEP)
+        LAMBDA = 0.7822641809107665  # obtained from the code below
+        # LAMBDA = [None]*len(tts)
+        # for j in range(len(tts)):
+        #     tYY = tY[:, :, j]
+        #     params = np.array([curve_fit(ym, mms, tYY[k],
+        #                                  p0=[0, 0, 0, 0.0047],
+        #                                  bounds=(-1, 1),
+        #                                  maxfev=100000)[0]
+        #                        for k in range(tYY.shape[0])])
+        #     LAMBDA[j] = np.mean(params, axis=0)[-1]
+        # LAMBDA = np.mean(LAMBDA)
+        x1s = [(1-np.exp(-LAMBDA*i))/(LAMBDA*i) for i in mms]
+        x2s = [i-(np.exp(-LAMBDA*t)) for (i, t) in zip(x1s, mms)]
+        xdf = pd.DataFrame({'x1s': x1s, 'x2s': x2s})
+        # print('LAMBDA overall:', LAMBDA)
+
     # XXX: Now we go moneyness skew
     for j, t in enumerate(tts):
         if count % 10 == 0:
             print('Done: ', count)
+
         count += 1
         # XXX: shape = samples, TSTEPS, moneyness, term structure
         mskew = tX[:, :, :, j]
@@ -754,13 +1317,20 @@ def mskew_pred(otype, dd='./figs', model='mskridge', TSTEPS=5):
             reg = Ridge(fit_intercept=True, alpha=1)
         elif model == 'msklasso':
             reg = Lasso(fit_intercept=True, alpha=1)
-        elif model == 'mskpls':
-            tokeep = cca_comps(mskew, tYY)
-            reg = PLSRegression(n_components=tokeep)
-        else:
+        elif model == 'mskenet':
             reg = ElasticNet(fit_intercept=True, alpha=1)
+        elif (model == 'mskplslasso' or model == 'mskplsridge' or
+              model == 'mskplsenet'):
+            tokeep = cca_comps(mskew, tYY)
+            reg = MPls(tokeep, True, model)
+        elif (model == 'msknsridge' or model == 'msknslasso' or
+              model == 'msknsenet'):
+            # XXX: Now fit the xdf and call NS
+            reg = NS(xdf, TSTEPS, model)
+
         reg.fit(mskew, tYY)
-        # print(reg.score(mskew, tYY))
+        # print('train r2score:', reg.score(mskew, tYY))
+
         import pickle
         if dd != './gfigs':
             with open('./mskew_models/%s_ts_%s_%s_%s.pkl' %
@@ -787,14 +1357,22 @@ def tskew_pred(otype, dd='./figs', model='tskridge', TSTEPS=5):
     mms = np.arange(LM, UM+MSTEP, MSTEP)
 
     count = 0
+    if model == 'tsknsridge' or model == 'tsknslasso' or model == 'tsknsenet':
+        TTS = [i for i in range(LT, UT+TSTEP, TSTEP)]
+        LAMBDA = 0.0147     # from Guo 2014.
+        x1s = [(1-np.exp(-LAMBDA*i))/(LAMBDA*i) for i in TTS]
+        x2s = [i-(np.exp(-LAMBDA*t)) for (i, t) in zip(x1s, TTS)]
+        xdf = pd.DataFrame({'x1s': x1s, 'x2s': x2s})
 
     # XXX: Now we go term structure skew
     for j, m in enumerate(mms):
         if count % 10 == 0:
             print('Done: ', count)
         count += 1
+
         # XXX: shape = samples, TSTEPS, moneyness, term structure
         tskew = tX[:, :, j]
+        # tskew1 = np.copy(tskew)  # needed for NS model
         tskew = tskew.reshape(tskew.shape[0], tskew.shape[1]*tskew.shape[2])
         # # XXX: Add m to the sample set
         ms = np.array([m]*tskew.shape[0]).reshape(tskew.shape[0], 1)
@@ -805,13 +1383,23 @@ def tskew_pred(otype, dd='./figs', model='tskridge', TSTEPS=5):
             reg = Ridge(fit_intercept=True, alpha=1)
         elif model == 'tsklasso':
             reg = Lasso(fit_intercept=True, alpha=1)
-        elif model == 'tskpls':
-            tokeep = cca_comps(tskew, tYY)
-            reg = PLSRegression(tokeep)
-        else:
+        elif model == 'tskenet':
             reg = ElasticNet(fit_intercept=True, alpha=1)
+        elif (model == 'tskplsridge' or model == 'tskplslasso' or
+              model == 'tskplsenet'):
+            tokeep = cca_comps(tskew, tYY)
+            reg = MPls(tokeep, True, model)
+            # reg = PLSRegression(tokeep)
+        elif (model == 'tsknsridge' or model == 'tsknslasso' or
+              model == 'tsknsenet'):
+            # XXX: First we want to get the betas for each day using
+            # OLS. Next, we predict the betas for t using t-1,...t-N
+            # lags using one of the models.
+            reg = NS(xdf, TSTEPS, model)
+
         reg.fit(tskew, tYY)
         # print(reg.score(tskew, tYY))
+
         import pickle
         if dd != './gfigs':
             with open('./tskew_models/%s_ts_%s_%s_%s.pkl' %
@@ -829,7 +1417,7 @@ def cca_comps(X, y, N_COMP=None):
         N_COMP_UB = min(X.shape[0], X.shape[1], N_TARGETS)
         N_COMP = max(1, N_COMP_UB)
 
-    reg = PLSRegression(n_components=N_COMP)
+    reg = PLSSVD(n_components=N_COMP)
     reg.fit(X, y)
     ypir, yir = reg.transform(X, y)
     tokeep = 0
@@ -883,14 +1471,17 @@ def point_pred(otype, dd='./figs', model='pmridge', TSTEPS=10):
                 reg = Ridge(fit_intercept=True, alpha=1)
             elif model == 'pmlasso':
                 reg = Lasso(fit_intercept=True, alpha=1)
-            elif model == 'pmpls':
+            elif (model == 'pmplsridge' or model == 'pmplslasso' or
+                  model == 'pmplsenet'):
                 tokeep = cca_comps(train_vec, tY[:, i, j])
-                reg = PLSRegression(n_components=tokeep)
+                reg = MPls(tokeep, True)
+                # reg = PLSRegression(n_components=tokeep)
             else:
                 reg = ElasticNet(fit_intercept=True, alpha=1,
                                  selection='random')
             reg.fit(train_vec, tY[:, i, j])
             # print('Train set R2: ', reg.score(train_vec, tY[:, i, j]))
+            # assert (False)
 
             # XXX: Predict (Validation)
             # print(vX.shape, vY.shape)
@@ -916,47 +1507,37 @@ def point_pred(otype, dd='./figs', model='pmridge', TSTEPS=10):
 def linear_fit(otype):
     # Surface regression prediction (RUN THIS WITH OMP_NUM_THREADS=10 on
     # command line)
-    # XXX: Point regression
-    for j in ['./figs', './gfigs']:
-        for k in [
-            'pmpls',
-                #   'pmridge',
-                    'pmlasso', 'pmenet'
-                  ]:
-            for i in [5, 10, 20]:
-                print('Doing: %s_%s_%s' % (k, j, i))
-                point_pred(otype, dd=j, model=k, TSTEPS=i)
 
     # XXX: Moneyness skew regression
     for j in ['./figs', './gfigs']:
-        for k in [
-            'mskpls',
-                #   'mskridge',
-                    'msklasso', 'mskenet'
-                  ]:
-            for i in [5, 10, 20]:
+        for i in [5, 20, 10]:
+            for k in ['ssviridge', 'ssvilasso', 'ssvienet',
+                      # 'ctridge', 'ctlasso', 'ctenet',
+                      # 'plsenet', 'plsridge', 'plslasso',
+                      # 'Ridge', 'Lasso', 'ElasticNet'
+                      ]:
                 print('Doing: %s_%s_%s' % (k, j, i))
-                mskew_pred(otype, dd=j, model=k, TSTEPS=i)
+                regression_predict(otype, model=k, dd=j, TSTEPS=i)
 
-    # XXX: Term structure skew regression
-    for j in ['./figs', './gfigs']:
-        for k in [
-            'tskpls',
-                #   'tskridge', 
-                  'tsklasso', 'tskenet'
-                  ]:
-            for i in [5, 10, 20]:
-                print('Doing: %s_%s_%s' % (k, j, i))
-                tskew_pred(otype, dd=j, model=k, TSTEPS=i)
+            # for k in ['tsknsridge', 'tsknslasso', 'tsknsenet',
+            #           'tskplsridge', 'tskplslasso', 'tskplsenet',
+            #           'tskridge', 'tsklasso', 'tskenet'
+            #           ]:
+            #     print('Doing: %s_%s_%s' % (k, j, i))
+            #     tskew_pred(otype, dd=j, model=k, TSTEPS=i)
 
-    # XXX: Surface regression
-    # for k in ['pls',
-    #           # 'Ridge', 'Lasso', 'ElasticNet'
-    #           ]:
-    #     for j in ['./figs', './gfigs']:
-    #         for i in [5, 10, 20]:
-    #             print('Doing: %s_%s_%s' % (k, j, i))
-    #             regression_predict(otype, model=k, dd=j, TSTEPS=i)
+            # for k in ['pmplsridge', 'pmplslasso', 'pmplsenet',
+            #           'pmridge', 'pmlasso', 'pmenet'
+            #           ]:
+            #     print('Doing: %s_%s_%s' % (k, j, i))
+            #     point_pred(otype, dd=j, model=k, TSTEPS=i)
+
+            # for k in ['mskplslasso', 'msknsridge', 'msknsenet', 'msknslasso',
+            #           'mskplsridge', 'mskplsenet',
+            #           'mskridge', 'msklasso', 'mskenet'
+            #           ]:
+            #     print('Doing: %s_%s_%s' % (k, j, i))
+            #     mskew_pred(otype, dd=j, model=k, TSTEPS=i)
 
 
 if __name__ == '__main__':
@@ -972,6 +1553,9 @@ if __name__ == '__main__':
     # XXX: Fit the linear models
     for otype in ['call', 'put']:
         linear_fit(otype)
+
+    # XXX: Get interest rates and forward prices
+    # excel_to_images(ironly=True)
 
     # XXX: ConvLSTM2D prediction
     # convlstm_predict(dd='./gfigs')
