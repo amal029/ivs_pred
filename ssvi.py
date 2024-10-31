@@ -11,6 +11,7 @@ from sklearn.metrics import r2_score
 from joblib import Parallel, delayed
 from sklearn.utils.validation import check_is_fitted
 from sklearn.exceptions import NotFittedError
+from sklearn.ensemble import RandomForestRegressor
 from pred import cr2_score, cr2_score_pval
 
 
@@ -97,6 +98,45 @@ def doARIMA(params, WINDOW):
     print(prho.shape, pnu.shape)
     return pd.DataFrame({'rho': prho[:-1], 'nu': pnu[:-1]})
 
+def doLSTM(params, WINDOW, TSTEP):
+    from non_linear_models import LSTM
+
+    def doit(ivs, lstm):
+        # XXX: Get the outputs
+        Y = list()
+        for i in range(ivs.shape[0]):
+            if i > 0 and i % TSTEP == 0:
+                Y.append(ivs[i])
+        Y = np.array(Y)
+
+        X = np.array([ivs[i] for i in range(ivs.shape[0])])
+        # XXX: Reshape the ivs
+        X = X.reshape(X.shape[0]//TSTEP, TSTEP, X.shape[1])
+        if not lstm.check_is_fitted():
+            lstm.fit(X[:-1], Y)
+        # XXX: Predict the output
+        pY = lstm.predict(X[-1].reshape(1, *X[-1].shape))
+        return pY.reshape(pY.shape[1],), lstm
+    
+    # XXX: Roll through the ivs and doit
+    N = params.shape[0]
+    pY = list()
+    pYY = list()
+    lstm_rho = LSTM((TSTEP, 1), 1)
+    lstm_nu = LSTM((TSTEP, 1), 1)
+    lstm_rho.compile()
+    lstm_nu.compile()
+    # XXX: Train lstm first
+    
+    for i in range(N-WINDOW):
+        if i % 100 == 0:
+            print('Done %s' % i)
+        aa = params[i:WINDOW+i]
+        yy, lstm_rho = doit(aa[:, 0].reshape(aa.shape[0], 1), lstm_rho)
+        yyy, lstm_nu = doit(aa[:, 1].reshape(aa.shape[0], 1), lstm_nu)
+        pY.append(yy)
+        pYY.append(yyy)
+    return pd.DataFrame({'rho': pY, 'nu': pYY}) 
 
 def doATMIV(atmiv, WINDOW, TSTEP):
     def RidgeFit(atmiv):
@@ -220,8 +260,13 @@ def main():
         ssvi = SSVI('ssviridge', TSTEP)
         params, ATM_IV = ssvi.fitY(X['IVS'])
 
+        # XXX: LSTM fit
+        plstmY = doLSTM(params, WINDOW, TSTEP)
+        print('R2 score LSTM rho: ', r2_score(params[WINDOW:, 0], plstmY['rho']))
+        print('R2 score LSTM nu: ', r2_score(params[WINDOW:, 1], plstmY['nu']))
+
         # XXX: Ridge fit (VAR model)
-        prY = doRidge(X, WINDOW, TSTEP=TSTEP)
+        prY = doRidge(X, WINDOW, TSTEP)
         print('R2 score Ridge: ', r2_score(yT, prY))
 
         # XXX: Get the ATM_IV predictions

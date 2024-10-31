@@ -17,12 +17,13 @@ class SVM():
 
 class LSTM():
     def __init__(self, input_shape, output_shape):
+        self.isfit = False
         self.model = keras.models.Sequential()
-        self.model.add(LSTM(units=125, input_shape=input_shape, return_sequences=True, activation='relu'))
+        self.model.add(keras.layers.LSTM(units=125, input_shape=input_shape, return_sequences=True, activation='relu'))
         self.model.add(keras.layers.Dropout(0.2))
-        self.model.add(LSTM(units=125, return_sequences=True, activation='relu'))
+        self.model.add(keras.layers.LSTM(units=125, return_sequences=True, activation='relu'))
         self.model.add(keras.layers.Dropout(0.2))
-        self.model.add(LSTM(units=125, return_sequences=False, activation='relu'))
+        self.model.add(keras.layers.LSTM(units=125, return_sequences=False, activation='relu'))
         self.model.add(Dense(output_shape))
     
     def compile(self, loss='mean_squared_error', optimizer='adam'):
@@ -30,6 +31,10 @@ class LSTM():
     
     def fit(self, X, y, epochs=100, batch_size=32):
         self.model.fit(X, y, epochs=epochs, batch_size=batch_size)
+        self.isfit = True
+    
+    def check_is_fitted(self):
+        return self.isfit
     
     def predict(self, X):
         return self.model.predict(X)
