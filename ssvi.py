@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import glob
+import multiprocessing
 import numpy as np
 from model_load_test import date_to_num, num_to_date
 import pandas as pd
@@ -12,7 +13,11 @@ from joblib import Parallel, delayed
 from sklearn.utils.validation import check_is_fitted
 from sklearn.exceptions import NotFittedError
 from sklearn.ensemble import RandomForestRegressor
+from sklearn import svm
+import dask.dataframe as dd
+import keras
 from pred import cr2_score, cr2_score_pval
+from non_linear_models import LSTM, DNN
 
 
 def load_data(otype, dd='./figs', START='20020208', NUM_IMAGES=2000):
@@ -98,45 +103,189 @@ def doARIMA(params, WINDOW):
     print(prho.shape, pnu.shape)
     return pd.DataFrame({'rho': prho[:-1], 'nu': pnu[:-1]})
 
+def innerSVM(ivs, TSTEP):
+    # XXX: Get the outputs
+    Y = list()
+    for i in range(ivs.shape[0]):
+        if i > 0 and i % TSTEP == 0:
+            Y.append(ivs[i])
+    Y = np.array(Y)
+
+    X = np.array([ivs[i] for i in range(ivs.shape[0])])
+
+    # XXX: Reshape the ivs
+    X = X.reshape(X.shape[0]//TSTEP, TSTEP, X.shape[1])
+    X = X.reshape(X.shape[0], X.shape[1]*X.shape[2])
+    svm_rho = svm.SVR()
+    svm_nu = svm.SVR()
+
+    svm_rho.fit(X[:-1, 0].reshape((X[:-1].shape[0], 1)), Y[:, 0])
+    svm_nu.fit(X[:-1, 1].reshape((X[:-1].shape[0], 1)), Y[:, 1])
+
+    # XXX: Predict the output
+    pY = svm_rho.predict(X[-1, 0].reshape(1, 1))
+    pYY = svm_nu.predict(X[-1, 0].reshape(1, 1))
+    return np.array([pY, pYY])
+
+
+
+def doSVM(params, WINDOW, TSTEP):
+
+    # XXX: Roll through the ivs and doit
+    N = params.shape[0]
+    pY = list()
+    input = []
+    # Create iterable input with (params[N:WINDOW], TSTEP)
+    for i in range(N-WINDOW):
+        input.append((params[i:WINDOW+i], TSTEP))
+    cpu_count = multiprocessing.cpu_count()
+    with multiprocessing.Pool(cpu_count) as p:
+        print("Starting multiprocessing")
+        output = p.starmap(innerSVM, input) 
+        print("Done")
+        for x in output:
+            pY.append(x)
+    return np.array(pY)
+
+def innerRF(ivs, TSTEP):
+    # XXX: Get the outputs
+    Y = list()
+    for i in range(ivs.shape[0]):
+        if i > 0 and i % TSTEP == 0:
+            Y.append(ivs[i])
+    Y = np.array(Y)
+
+    X = np.array([ivs[i] for i in range(ivs.shape[0])])
+    # XXX: Reshape the ivs
+    X = X.reshape(X.shape[0]//TSTEP, TSTEP, X.shape[1])
+    X = X.reshape(X.shape[0], X.shape[1]*X.shape[2])
+
+    rf = RandomForestRegressor(n_estimators=1000)
+    
+    rf.fit(X[:-1], Y)
+
+    # XXX: Predict the output
+    pY = rf.predict(X[-1].reshape(1, *X[-1].shape))
+    return pY.reshape(pY.shape[1],) 
+
+def doRF(params, WINDOW, TSTEP):
+    print("Doing RF")
+    # XXX: Roll through the ivs and doit
+    N = params.shape[0]
+    pY = list()
+    input = []
+    # Create iterable input with (params[N:WINDOW], TSTEP)
+    for i in range(N-WINDOW):
+        input.append((params[i:WINDOW+i], TSTEP))
+    cpu_count = multiprocessing.cpu_count()
+    with multiprocessing.Pool(cpu_count) as p:
+        print("Starting multiprocessing")
+        output = p.starmap(innerRF, input) 
+        print("Done")
+        for x in output:
+            pY.append(x)
+    return np.array(pY)
+
+def innerDNN(dnn, ivs, TSTEP):
+    # XXX: Get the outputs
+    Y = list()
+    for i in range(ivs.shape[0]):
+        if i > 0 and i % TSTEP == 0:
+            Y.append(ivs[i])
+    Y = np.array(Y)
+
+    X = np.array([ivs[i] for i in range(ivs.shape[0])])
+    # XXX: Reshape the ivs
+    X = X.reshape(X.shape[0]//TSTEP, TSTEP, X.shape[1])
+    X = X.reshape(X.shape[0], X.shape[1]*X.shape[2])
+    # XXX: Check if the model is fitted
+    if not dnn.check_is_fitted():
+        dnn.fit(X[:-1], Y)
+    # XXX: Predict the output
+    pY = dnn.predict(X[-1].reshape(1, *X[-1].shape))
+    return pY.reshape(pY.shape[1],)
+
+def doDNN(params, WINDOW, TSTEP):
+    # XXX: Roll through the ivs and doit
+    N = params.shape[0]
+    pY = list()
+
+    # XXX: Create the DNN model
+    dnn = DNN((TSTEP*2,), 2)
+    dnn.compile(optimizer=keras.optimizers.Adam(0.001))
+
+    # XXX: Parallel processing
+    # input = []
+    # # Create iterable input with (params[N:WINDOW], TSTEP)
+    # for i in range(N-WINDOW):
+    #     input.append((params[i:WINDOW+i], TSTEP))
+    # cpu_count = multiprocessing.cpu_count()
+    # with multiprocessing.Pool(6) as p:
+    #     print("Starting multiprocessing")
+    #     output = p.starmap(innerDNN, input) 
+    #     print("Done")
+    #     for x in output:
+    #         pY.append(x)
+
+    # XXX: Loop through the inputs
+    for i in range(N-WINDOW): 
+        if i % 100 == 0:
+            print('Done %s' % i)
+        aa = params[i:WINDOW+i]
+        yy = innerDNN(aa, TSTEP)
+        pY.append(yy)
+
+    return np.array(pY)
+
+def innerLSTM(lstm, ivs, TSTEP):
+    # XXX: Get the outputs
+    Y = list()
+    for i in range(ivs.shape[0]):
+        if i > 0 and i % TSTEP == 0:
+            Y.append(ivs[i])
+    Y = np.array(Y)
+
+    X = np.array([ivs[i] for i in range(ivs.shape[0])])
+    # XXX: Reshape the ivs
+    X = X.reshape(X.shape[0]//TSTEP, TSTEP, X.shape[1])
+    # XXX: Check if the model is fitted
+    if not lstm.check_is_fitted():
+        lstm.fit(X[:-1], Y)
+    # XXX: Predict the output
+    pY = lstm.predict(X[-1].reshape(1, *X[-1].shape))
+    return pY.reshape(pY.shape[1],) 
+
 def doLSTM(params, WINDOW, TSTEP):
-    from non_linear_models import LSTM
 
-    def doit(ivs, lstm):
-        # XXX: Get the outputs
-        Y = list()
-        for i in range(ivs.shape[0]):
-            if i > 0 and i % TSTEP == 0:
-                Y.append(ivs[i])
-        Y = np.array(Y)
-
-        X = np.array([ivs[i] for i in range(ivs.shape[0])])
-        # XXX: Reshape the ivs
-        X = X.reshape(X.shape[0]//TSTEP, TSTEP, X.shape[1])
-        if not lstm.check_is_fitted():
-            lstm.fit(X[:-1], Y)
-        # XXX: Predict the output
-        pY = lstm.predict(X[-1].reshape(1, *X[-1].shape))
-        return pY.reshape(pY.shape[1],), lstm
     
     # XXX: Roll through the ivs and doit
     N = params.shape[0]
     pY = list()
-    pYY = list()
-    lstm_rho = LSTM((TSTEP, 1), 1)
-    lstm_nu = LSTM((TSTEP, 1), 1)
-    lstm_rho.compile()
-    lstm_nu.compile()
-    # XXX: Train lstm first
+
+    # XXX: Create the LSTM model
+    lstm = LSTM((TSTEP, 2), 2)
+    lstm.compile(optimizer=keras.optimizers.Adam(0.001))
+
+    # XXX: Multi processing
+    # input = []
+    # for i in range(N-WINDOW):
+    #     input.append((params[i:WINDOW+i], TSTEP))
+    # cpu_count = multiprocessing.cpu_count()
+    # with multiprocessing.Pool(cpu_count) as p:
+    #     print("Starting multiprocessing")
+    #     output = p.starmap(innerLSTM, input) 
+    #     print("Done")
+    #     for x in output:
+    #         pY.append(x)
     
     for i in range(N-WINDOW):
         if i % 100 == 0:
             print('Done %s' % i)
         aa = params[i:WINDOW+i]
-        yy, lstm_rho = doit(aa[:, 0].reshape(aa.shape[0], 1), lstm_rho)
-        yyy, lstm_nu = doit(aa[:, 1].reshape(aa.shape[0], 1), lstm_nu)
+        yy, lstm= innerLSTM(aa, lstm)
         pY.append(yy)
-        pYY.append(yyy)
-    return pd.DataFrame({'rho': pY, 'nu': pYY}) 
+
+    return pd.DataFrame({'rho': pY[:, 0], 'nu': pY[:, 1]}) 
 
 def doATMIV(atmiv, WINDOW, TSTEP):
     def RidgeFit(atmiv):
@@ -234,6 +383,87 @@ def doRidge(X, WINDOW, TSTEP):
         pY.append(yy)
     return np.array(pY)
 
+def non_linear():
+    # turn off gpu support for tensorflow
+    import os
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+    for otype in ['put', 'call']:
+        WINDOW = 1000
+        TSTEP = 5
+        START_DATE = '20140109'
+        END_DATE = '20221230'
+        START = date_to_num(otype, START_DATE, dd='./figs')
+        # XXX: Go back for training
+        START = START-WINDOW
+        START_DATE = num_to_date(otype, START)
+        END = date_to_num(otype, END_DATE, dd='./figs') - TSTEP
+        NIMAGES = END - START
+
+        print('start date: ', START_DATE)
+        X = load_data(otype, START=START_DATE, NUM_IMAGES=NIMAGES)
+        print(X.shape)
+
+        # XXX: Get the true values from IVS
+        yT = np.array([i for i in X['IVS'][WINDOW:]])
+        yT = yT.reshape(yT.shape[0], yT.shape[1]*yT.shape[2])
+
+        # XXX: Fit the SSVI model to each day separately
+        ssvi = SSVI('ssviridge', TSTEP)
+        params, ATM_IV = ssvi.fitY(X['IVS'])
+
+        # XXX: DNN fit
+        paramsDNN = doDNN(params, WINDOW, TSTEP) 
+        with open('./ssvi_results.txt', 'a') as f:
+            f.write('R2 score DNN rho: %s\n' % r2_score(params[WINDOW:, 0], paramsDNN[:, 0]))
+            f.write('R2 score DNN nu: %s\n' % r2_score(params[WINDOW:, 1], paramsDNN[:, 1]))
+        print('R2 score DNN rho: ', r2_score(params[WINDOW:, 0], paramsDNN[:, 0]))
+        print('R2 score DNN nu: ', r2_score(params[WINDOW:, 1], paramsDNN[:, 1]))
+
+        # XXX: SVM fit 
+        paramsSVM = doSVM(params, WINDOW, TSTEP)
+        with open('./ssvi_results.txt', 'a') as f:
+            f.write('R2 score SVM rho: %s\n' % r2_score(params[WINDOW:, 0], paramsSVM[:, 0]))
+            f.write('R2 score SVM nu: %s\n' % r2_score(params[WINDOW:, 1], paramsSVM[:, 1]))
+        print('R2 score SVM rho: ', r2_score(params[WINDOW:, 0], paramsSVM[:, 0]))
+        print('R2 score SVM nu: ', r2_score(params[WINDOW:, 1], paramsSVM[:, 1]))
+
+        # XXX: RF fit
+        paramsRF = doRF(params, WINDOW, TSTEP)
+        with open('./ssvi_results.txt', 'a') as f:
+            f.write('R2 score RF rho: %s\n' % r2_score(params[WINDOW:, 0], paramsRF[:, 0]))
+            f.write('R2 score RF nu: %s\n' % r2_score(params[WINDOW:, 1], paramsRF[:, 1]))
+        print('R2 score RF rho: ', r2_score(params[WINDOW:, 0], paramsRF[:, 0]))
+        print('R2 score RF nu: ', r2_score(params[WINDOW:, 1], paramsRF[:, 1]))
+
+        # XXX: LSTM fit
+        paramsLSTM = doLSTM(params, WINDOW, TSTEP)
+        with open('./ssvi_results.txt', 'a') as f:
+            f.write('R2 score LSTM rho: %s\n' % r2_score(params[WINDOW:, 0], paramsLSTM['rho']))
+            f.write('R2 score LSTM nu: %s\n' % r2_score(params[WINDOW:, 1], paramsLSTM['nu']))
+        print('R2 score LSTM rho: ', r2_score(params[WINDOW:, 0], paramsLSTM['rho']))
+        print('R2 score LSTM nu: ', r2_score(params[WINDOW:, 1], paramsLSTM['nu']))
+
+        # XXX: Now try this same thing with ARIMA
+        pparams = doARIMA(params, WINDOW)
+        with open('./ssvi_results.txt', 'a') as f:
+            f.write('R2 score rho: %s\n' % r2_score(params[WINDOW:, 0], pparams['rho']))
+            f.write('R2 score nu: %s\n' % r2_score(params[WINDOW:, 1], pparams['nu']))
+        print(params[WINDOW:].shape, pparams.shape)
+        print('R2 score rho: ', r2_score(params[WINDOW:, 0], pparams['rho']))
+        print('R2 score nu: ', r2_score(params[WINDOW:, 1], pparams['nu']))
+
+
+        print('R2 score SVM rho: ', r2_score(params[WINDOW:, 0], paramsSVM[:, 0]))
+        print('R2 score SVM nu: ', r2_score(params[WINDOW:, 1], paramsSVM[:, 1]))
+        print('R2 score RF rho: ', r2_score(params[WINDOW:, 0], paramsRF[:, 0]))
+        print('R2 score RF nu: ', r2_score(params[WINDOW:, 1], paramsRF[:, 1]))
+        print('R2 score rho: ', r2_score(params[WINDOW:, 0], pparams['rho']))
+        print('R2 score nu: ', r2_score(params[WINDOW:, 1], pparams['nu']))
+        print('R2 score LSTM rho: ', r2_score(params[WINDOW:, 0], paramsLSTM['rho']))
+        print('R2 score LSTM nu: ', r2_score(params[WINDOW:, 1], paramsLSTM['nu']))
+
+
+
 
 def main():
     for otype in ['put', 'call']:
@@ -311,4 +541,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    non_linear()
