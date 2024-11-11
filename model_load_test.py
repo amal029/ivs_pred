@@ -20,6 +20,7 @@ from pred import NS
 from pred import CT
 from pred import SSVI
 from scipy import stats
+import gc
 
 
 def date_to_num(otype, date, dd='./figs'):
@@ -140,6 +141,7 @@ def extract_features(X, model, dd, TSTEPS, feature_res, m=0, t=0, type='mskew', 
 
     import feature_extraction as fe
     transform_type = type[1:]
+    model = model[-3:]
     if(model == 'pca'):
         if type == 'point':
             n_components = (TSTEPS//2)
@@ -178,6 +180,7 @@ def extract_features(X, model, dd, TSTEPS, feature_res, m=0, t=0, type='mskew', 
             encoder = keras.saving.load_model(toopen, custom_objects={'VAE': fe.VAE, 'Sampling': fe.Sampling})
 
         X = fe.autoencoder_transform(encoder, X, vae=vae)
+        del encoder
     else:
         if type[1:] =='skew' or type == 'surf':
             # Reshape to 3D
@@ -367,7 +370,7 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         if not plot:
             out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
-    elif model == 'mskautoencoder' or model == 'mskpca' or model == 'mskhar' or model == 'mskvae':
+    elif model == 'mskautoencoder' or model == 'mskpca' or model == 'mskhar' or model == 'mskvae' or model == 'mskenethar' or model == 'msklassohar' or model == 'mskenetpca' or model == 'msklassopca' or model == 'mskenetvae' or model == 'msklassovae':
         import feature_extraction as fe
         from feature_extraction import Sampling
         # XXX: The output vector
@@ -432,7 +435,7 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
 
 
 
-    elif model == 'tskautoencoder' or model == 'tskpca' or model == 'tskhar' or model == 'tskvae':
+    elif model == 'tskautoencoder' or model == 'tskpca' or model == 'tskhar' or model == 'tskvae' or model == 'tskenethar' or model == 'tsklassohar' or model == 'tskenetpca' or model == 'tsklassopca' or model == 'tskenetvae' or model == 'tsklassovae':
         import feature_extraction as fe
         from feature_extraction import Sampling
         # XXX: The output vector
@@ -497,7 +500,7 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
 
-    elif model == 'pmautoencoder' or model == 'pmhar' or model == 'pmpca' or model == 'pmvae':
+    elif model == 'pmautoencoder' or model == 'pmhar' or model == 'pmpca' or model == 'pmvae' or model == 'pmenethar' or model == 'pmlassohar' or model == 'pmenetpca' or model == 'pmlassopca' or model == 'pmenetvae' or model == 'pmlassovae':
         import feature_extraction as fe
         from feature_extraction import Sampling
         # XXX: The output vector
@@ -612,7 +615,7 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         if not plot:
             out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
-    elif (model == 'vae' or model == 'pca' or model == 'har'):
+    elif (model == 'vae' or model == 'pca' or model == 'har' or model == 'enethar' or model == 'lassohar' or model == 'enetpca' or model == 'lassopca' or model == 'enetvae' or model == 'lassovae'):
         import pickle
         valX = valX.reshape(valX.shape[0],
                             valX.shape[1]*valX.shape[2]*valX.shape[3])
@@ -859,28 +862,47 @@ def overall(fname):
 
 
 def model_v_model(otype):
-    TTS = [5, 20, 10]
+    TTS = [21]
+    # models = [
+    #     r'ctridge', r'ctlasso', r'ctenet',
+    #     r'ssviridge', r'ssvilasso', r'ssvienet',
+    #     'msknsridge', 'mskenet', 'msknslasso', 'msknsenet',
+    #     'tsknsridge', 'tsknslasso', 'tsknsenet',
+    #     'mskplslasso', 'mskplsridge', 'mskplsenet',
+    #     'msklasso', 'ridge', 'lasso',
+    #     'enet', 'plsridge', 'plslasso', 'plsenet',
+    #     'pmridge', 'pmlasso', 'pmenet', 'pmplsridge',
+    #     'pmplslasso', 'pmplsenet',
+    #     'mskridge', 'tskridge',
+    #     'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
+    #     'tskplsenet']
     models = [
-        r'ctridge', r'ctlasso', r'ctenet',
-        r'ssviridge', r'ssvilasso', r'ssvienet',
-        'msknsridge', 'mskenet', 'msknslasso', 'msknsenet',
-        'tsknsridge', 'tsknslasso', 'tsknsenet',
-        'mskplslasso', 'mskplsridge', 'mskplsenet',
-        'msklasso', 'ridge', 'lasso',
-        'enet', 'plsridge', 'plslasso', 'plsenet',
-        'pmridge', 'pmlasso', 'pmenet', 'pmplsridge',
-        'pmplslasso', 'pmplsenet',
-        'mskridge', 'tskridge',
-        'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
-        'tskplsenet']
+        # 'tskpca', 'tskhar', 'tskvae', 
+        'tskenethar', 'tsklassohar', 
+        # 'tskenetpca', 'tsklassopca', 'tskenetvae', 'tsklassovae',
+        # 'mskpca', 'mskhar', 'mskvae', 
+        'mskenethar', 'msklassohar', 
+        # 'mskenetpca', 'msklassopca', 'mskenetvae', 'msklassovae',
+        # 'pmpca', 'pmhar', 'pmvae', 
+        'pmenethar', 'pmlassohar', 
+        # 'pmenetpca', 'pmlassopca', 'pmenetvae', 'pmlassovae',
+        # 'vae', 'pca', 'har', 
+        'enethar', 'lassohar', 
+        # 'enetpca', 'lassopca', 'enetvae', 'lassovae'
+    ]
+
+
     fp = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
                                                              len(models))
           for t in TTS}
 
-
-    for dd in ['./figs']:
+    for dd in ['./figs', './gfigs']:
         for t in fp.keys():
             for i in range(len(models)):
+                # Check if results already exist 
+                if os.path.exists('./final_results/%s_%s_ts_%s_model_%s.npy.gz' % (otype, dd.split('/')[1], t, models[i])):
+                    continue
+                # Start a process
                 dates, y, o = main(otype, plot=False, TSTEPS=t,
                                    model=models[i],
                                    get_features=False,
@@ -893,19 +915,34 @@ def model_v_model(otype):
                 res = np.append(dates, y, axis=1)
                 res = np.append(res, o, axis=1)
                 blosc2.save_array(res, tosave, mode='w')
+                gc.collect()
 
 
 def call_dmtest(otype):
     TTS = [10, 20, 5]
-    models = ['ssviridge', 'lasso', 'enet', 'plsridge', 'plslasso', 'plsenet',
-              'pmlasso', 'pmenet', 'pmplsridge', 'pmplslasso',
-              'pmplsenet', 'msklasso', 'mskenet', 'mskplsridge', 'mskplslasso',
-              'mskplsenet', 'msknsridge', 'msknslasso', 'msknsenet',
-              'ctridge', 'ctlasso', 'ctenet',
-              'ssvilasso', 'ssvienet',
-              'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
-              'tskplsenet', 'tsknsridge', 'tsknslasso', 'tsknsenet',
-              'ridge', 'mskridge', 'pmridge', 'tskridge']
+    models = [
+        'tskpca', 'tskhar', 'tskvae', 
+        'tskenethar', 'tsklassohar', 
+        'tskenetpca', 'tsklassopca', 'tskenetvae', 'tsklassovae',
+        'mskpca', 'mskhar', 'mskvae', 
+        'mskenethar', 'msklassohar', 
+        'mskenetpca', 'msklassopca', 'mskenetvae', 'msklassovae',
+        'pmpca', 'pmhar', 'pmvae', 
+        'pmenethar', 'pmlassohar', 
+        'pmenetpca', 'pmlassopca', 'pmenetvae', 'pmlassovae',
+        'vae', 'pca', 'har', 
+        'enethar', 'lassohar', 
+        'enetpca', 'lassopca', 'enetvae', 'lassovae'
+    ]
+    # models = ['ssviridge', 'lasso', 'enet', 'plsridge', 'plslasso', 'plsenet',
+    #           'pmlasso', 'pmenet', 'pmplsridge', 'pmplslasso',
+    #           'pmplsenet', 'msklasso', 'mskenet', 'mskplsridge', 'mskplslasso',
+    #           'mskplsenet', 'msknsridge', 'msknslasso', 'msknsenet',
+    #           'ctridge', 'ctlasso', 'ctenet',
+    #           'ssvilasso', 'ssvienet',
+    #           'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
+    #           'tskplsenet', 'tsknsridge', 'tsknslasso', 'tsknsenet',
+    #           'ridge', 'mskridge', 'pmridge', 'tskridge']
     fp = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
                                                              len(models))
           for t in TTS}
@@ -927,8 +964,11 @@ def call_dmtest(otype):
                      for i in ['figs', 'gfigs']}
             # fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, sharex=True)
             for i in range(len(models)-1):
+                tstep = ts
+                if models[i][-3:] == 'har':
+                    tstep = 21
                 name1 = ('./final_results/%s_%s_ts_%s_model_%s.npy.gz' %
-                         (otype, dd, ts, models[i]))
+                         (otype, dd, tstep, models[i]))
                 print('Doing %d: %s' % (i, name1))
                 if cache[dd][ts][models[i]] is None:
                     y, yp = getpreds(name1)
@@ -942,9 +982,12 @@ def call_dmtest(otype):
                 else:
                     y, yp = cache[dd][ts][models[i]]
                 for j in range(i+1, len(models)):
+                    tstep = ts
+                    if models[j][-3:] == 'har':
+                        tstep = 21
                     # XXX: Do only the best ones
                     name2 = ('./final_results/%s_%s_ts_%s_model_%s.npy.gz' %
-                             (otype, dd, ts, models[j]))
+                             (otype, dd, tstep, models[j]))
                     print('Doing %d: %s' % (j, name2))
                     if cache[dd][ts][models[j]] is None:
                         yk, ypk = getpreds(name2)
@@ -957,18 +1000,31 @@ def call_dmtest(otype):
                         cache[dd][ts][models[j]] = (yk, ypk)
                     else:
                         yk, ypk = cache[dd][ts][models[j]]
-                    assert (np.array_equal(y, yk))
+                    
+                    # XXX: Incase of model1 vs HAR 21 model arrays are not equal 
+                    #   in size, we need to shave off the last few samples
+                    if not np.array_equal(y, yk):
+                        to_remove = np.abs(y.shape[1] - yk.shape[1])
+                        if len(y) > len(yk):
+                            # shave off the last few samples to compare to har 21
+                            y = y[:, :-to_remove]
+                            yp = yp[:, :-to_remove]
+                        else:
+                            # shave off the last few samples to compare to har 21
+                            yk = yk[:, :-to_remove]
+                            ypk = ypk[:, :-to_remove]
+                    # assert (np.array_equal(y, yk))
                     # XXX: Now we can do Diebold mariano test
                     try:
-                        dstat, pval = dmtest.dm_test(y, yp, ypk)
+                        dstat, pval = dmtest.dm_test(y, yp, ypk, V1=yk)
                     except dmtest.ZeroVarianceException:
                         dstat, pval = np.nan, np.nan
                     fd[ts][i][j] = dstat
                     fp[ts][i][j] = pval
                     # XXX: We have to transpose these, because they are
                     # transposed in getpreds!
-                    r2v[ts][i][j] = cr2_score(y.T, yp.T, ypk.T)*100
-                    r2p[ts][i][j] = cr2_score_pval(y.T, yp.T, ypk.T)
+                    r2v[ts][i][j] = cr2_score(y.T, yp.T, ypk.T, y2true=yk.T)*100
+                    r2p[ts][i][j] = cr2_score_pval(y.T, yp.T, ypk.T, y2true=yk.T)
         # XXX: Save the results of dmtest
         header = ','.join(models)
         for t in fp.keys():
@@ -1363,8 +1419,8 @@ def lag_test(otype):
 if __name__ == '__main__':
     plt.style.use('seaborn-v0_8-whitegrid')
     # XXX: model vs model
-    for otype in ['call', 'put']:
-        model_v_model(otype)
+    # for otype in ['call', 'put']:
+        # model_v_model(otype)
         # p = multiprocessing.Process(target=model_v_model, args=(otype))
         # p.start()
         # p.join()
@@ -1375,13 +1431,13 @@ if __name__ == '__main__':
         # XXX: Plot the best time series RMSE and MAPE
         # call_timeseries(otype)
 
-    # for otype in ['call', 'put']:
-    #     # XXX: DM test across time (RMSE)
-    #     call_dmtest(otype)
+    for otype in ['call', 'put']:
+        # XXX: DM test across time (RMSE)
+        call_dmtest(otype)
 
     # XXX: r2_score for moneyness and term structure
-    for otype in ['call', 'put']:
-        r2_rmse_score_mt(otype)
+    # for otype in ['call', 'put']:
+    #     r2_rmse_score_mt(otype)
 
     # for otype in ['call', 'put']:
     #     direction(otype)
