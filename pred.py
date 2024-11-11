@@ -46,7 +46,7 @@ TSTEP = 5                       # days
 DAYS = 365
 
 
-def cr2_score_pval(ytrue, y1, y2, greater=True):
+def cr2_score_pval(ytrue, y1, y2, greater=True, y2true=None):
     """ytrue: The true series
     y1: prediction 1: (sample, len(moneyness)*len(termstructure)).
     This should be one model that you want to compare against.
@@ -54,9 +54,11 @@ def cr2_score_pval(ytrue, y1, y2, greater=True):
     y2: prediction 2: (sample, len(moneyness)*len(termstructure)). This
     is the second model that you want to compare against.
 
+    y2true: The true series for y2. If not provided, it is assumed to be
+
     """
     f = np.sum((ytrue - y1)**2, axis=1)
-    s = np.sum((ytrue - y2)**2 - (y2 - y1)**2, axis=1)
+    s = np.sum((y2true - y2)**2 - (y2 - y1)**2, axis=1)
     v = f - s
     if greater:
         resg = ttest_1samp(v, 0.0, alternative='greater')
@@ -65,18 +67,20 @@ def cr2_score_pval(ytrue, y1, y2, greater=True):
     return resg.pvalue
 
 
-def cr2_score(ytrue, y1, y2):
+def cr2_score(ytrue, y1, y2, y2true=None):
     """Own r2score from paper: Are there gains from using information
     over the surface of implied volatilies?
     ytrue: true time series
     y1: prediction from model 1(benchmark to compare against)
     y2  prediction from model 2
+    y2true: true time series for model 2. If not provided, it is assumed
 
     """
     assert (ytrue.shape == y1.shape)
-    assert (ytrue.shape == y2.shape)
+    assert (y2true.shape == y2.shape)
     assert (len(ytrue.shape) == 2)
-    num = np.sum((ytrue - y2)**2)
+    assert (len(y2true.shape) == 2)
+    num = np.sum((y2true - y2)**2)
     den = np.sum((ytrue - y1)**2)
     return 1 - (num/den)
 
