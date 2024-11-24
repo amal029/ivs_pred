@@ -132,7 +132,7 @@ class Autoencoder:
         # dataset = dataset.batch(1)
         # dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
         self.model.fit(tX, tX, epochs=epochs, batch_size=batch_size,
-                       shuffle=shuffle, validation_split=validation_split, callbacks=[reduce_lr, early_stopping], verbose=0)
+                       shuffle=shuffle, validation_split=validation_split, callbacks=[reduce_lr, early_stopping], verbose=1)
     
     def save(self, path):
         if self.vae:
@@ -311,8 +311,10 @@ def extract_features(tX, tY, model_name='pca', TSTEPS=21, type='tskew', dd='./fi
         
         if os.path.isfile(tosave):
             vae_encoder = keras.saving.load_model(tosave, custom_objects={'VAE': VAE, 'Sampling': Sampling})
-            vae_encoder.predict(tX, verbose=0)[2]
+            tX = vae_encoder.predict(tX, verbose=0)[2]
         else:
+            # TODO: JUST FOR NOW 
+            raise ValueError('Encoder model not found') 
             encoding_dim = TSTEPS//2 
 
             if type[1:] == 'skew' or type == 'surf':
@@ -569,7 +571,7 @@ def point_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs', learn="rid
                 with open(tosave, 'wb') as f:
                     pickle.dump(reg, f) 
             
-            if len(processes) >= multiprocessing.cpu_count():
+            if len(processes) >= (multiprocessing.cpu_count()):
                 for p in processes:
                     p.join()
                 processes = []
@@ -600,11 +602,10 @@ if __name__ == "__main__":
     # model_name = 'vae'
     print("Starting")
     import multiprocessing
-    import concurrent.futures
 
 
     # Set environment variable to use cpu instead of gpu
-    # os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
     # gpus = tf.config.experimental.list_physical_devices('GPU')
     # for gpu in gpus:
     #     tf.config.experimental.set_memory_growth(gpu, True)
@@ -614,65 +615,61 @@ if __name__ == "__main__":
     # point_pred(data, otype=otype, model_name=model_name, TSTEPS=TSTEPS, dd=dd)
     for n in ['call', 'put']:
         
-        # for i in ['./figs', './gfigs']:
-        #     for x in ['enet', 'lasso']:
-        #         for j in [5, 10, 20]:
-        #             data = load_data(otype=n, dd=i, TSTEPS=j)
-        #             for k in ['vae', 'pca', 'har']:
-        #                 print('Running for surf: ', n, i)
-        #                 # surf_pred(data, n, k, j, i)
-        #                 p = multiprocessing.Process(target=surf_pred, args=(data, n, k, j, i))
-        #                 p.start()
-        #                 p.join()
-
-        # for i in ['./figs', './gfigs']:
-        #     if n == 'call':
-        #         continue
-        #     for x in ['enet', 'lasso']:
-        #         for j in [5, 10, 20]:
-        #             data = load_data(otype=n, dd=i, TSTEPS=j)
-        #             for k in ['vae', 'pca']:
-        #                 print('Running for mskew pred: ', x, n, i, k, j)
-        #                 p = multiprocessing.Process(target=mskew_pred, args=(data, n, k, j, i, x))
-        #                 p.start()
-        #                 p.join()
-        #                 print("Done")
+        for i in ['./figs', './gfigs']:
+            for x in ['enet', 'lasso']:
+                for j in [5, 10, 20]:
+                    data = load_data(otype=n, dd=i, TSTEPS=j)
+                    for k in ['vae']:
+                        print('Running for surf: ', n, i, x, j, k)
+                        # surf_pred(data, n, k, j, i)
+                        p = multiprocessing.Process(target=surf_pred, args=(data, n, k, j, i, x))
+                        p.start()
+                        p.join()
 
         for i in ['./figs', './gfigs']:
             for x in ['enet', 'lasso']:
                 for j in [5, 10, 20]:
                     data = load_data(otype=n, dd=i, TSTEPS=j)
-                    for k in ['pca']:
+                    for k in ['vae']:
+                        print('Running for mskew pred: ', x, n, i, k, j)
+                        p = multiprocessing.Process(target=mskew_pred, args=(data, n, k, j, i, x))
+                        p.start()
+                        p.join()
+                        print("Done")
+
+        for i in ['./figs', './gfigs']:
+            for j in [5, 10, 20]:
+                data = load_data(otype=n, dd=i, TSTEPS=j)
+                for x in ['enet', 'lasso']:
+                    for k in ['vae']:
                         # print('Running for point pred: ', x, n, i, k, j)
                         point_pred(data, n, k, j, i, x)
                         # p = multiprocessing.Process(target=point_pred, args=(data, n, k, j, i, x))
                         # p.start()
                         # p.join()
 
-        # for i in ['./figs', './gfigs']:
-        #     if n == 'call':
-        #         continue
-        #     for x in ['enet', 'lasso']:
-        #         for j in [5, 10, 20]:
-        #             data = load_data(otype=n, dd=i, TSTEPS=j)
-        #             for k in ['vae', 'pca']:
-        #                 print('Running for tskew pred: ', x, n, i, k, j)
-        #                 p = multiprocessing.Process(target=tskew_pred, args=(data, n, k, j, i, x))
-        #                 p.start()
-        #                 p.join()
-        #                 print("Done")
-        #                 # tskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
-  
-#         # For HAR 
         for i in ['./figs', './gfigs']:
             for x in ['enet', 'lasso']:
-                data = load_data(otype=n, dd=i, TSTEPS=21)
-                print('Running for all : ', x, n, i, 'har')
-                # surf_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
-                # print("Done surf")
-                # tskew_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
-                # print("Done tskew")
-                # mskew_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
-                # print("Done mskew")
-                point_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
-                print("Done point")
+                for j in [5, 10, 20]:
+                    data = load_data(otype=n, dd=i, TSTEPS=j)
+                    for k in ['vae']:
+                        print('Running for tskew pred: ', x, n, i, k, j)
+                        p = multiprocessing.Process(target=tskew_pred, args=(data, n, k, j, i, x))
+                        p.start()
+                        p.join()
+                        print("Done")
+                        # tskew_pred(otype=n, model_name=k, TSTEPS=j, dd=i)
+  
+#         # For HAR 
+        # for i in ['./figs', './gfigs']:
+        #     for x in ['enet', 'lasso']:
+        #         data = load_data(otype=n, dd=i, TSTEPS=21)
+        #         print('Running for all : ', x, n, i, 'har')
+        #         # surf_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
+        #         # print("Done surf")
+        #         # tskew_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
+        #         # print("Done tskew")
+        #         # mskew_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
+        #         # print("Done mskew")
+        #         point_pred(data, otype=n, model_name='har', TSTEPS=21, dd=i, learn=x)
+        #         print("Done point")

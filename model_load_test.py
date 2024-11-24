@@ -862,7 +862,7 @@ def overall(fname):
 
 
 def model_v_model(otype):
-    TTS = [21]
+    TTS = [5, 10, 20]
     # models = [
     #     r'ctridge', r'ctlasso', r'ctenet',
     #     r'ssviridge', r'ssvilasso', r'ssvienet',
@@ -878,17 +878,19 @@ def model_v_model(otype):
     #     'tskplsenet']
     models = [
         # 'tskpca', 'tskhar', 'tskvae', 
-        'tskenethar', 'tsklassohar', 
+        # 'tskenethar', 'tsklassohar', 
         # 'tskenetpca', 'tsklassopca', 'tskenetvae', 'tsklassovae',
         # 'mskpca', 'mskhar', 'mskvae', 
-        'mskenethar', 'msklassohar', 
+        # 'mskenethar', 'msklassohar', 
         # 'mskenetpca', 'msklassopca', 'mskenetvae', 'msklassovae',
         # 'pmpca', 'pmhar', 'pmvae', 
-        'pmenethar', 'pmlassohar', 
+        # 'pmenethar', 'pmlassohar', 
         # 'pmenetpca', 'pmlassopca', 'pmenetvae', 'pmlassovae',
         # 'vae', 'pca', 'har', 
-        'enethar', 'lassohar', 
+        # 'enethar', 'lassohar', 
         # 'enetpca', 'lassopca', 'enetvae', 'lassovae'
+        # 'pmenetpca', 'pmlassopca'
+        'pmlassovae', 'pmenetvae'
     ]
 
 
@@ -1002,17 +1004,17 @@ def call_dmtest(otype):
                         yk, ypk = cache[dd][ts][models[j]]
                     
                     # XXX: Incase of model1 vs HAR 21 model arrays are not equal 
-                    #   in size, we need to shave off the last few samples
-                    if not np.array_equal(y, yk):
+                    #   in size, we need to shave off the first few samples
+                    if not np.array_equal(y.shape, yk.shape):
                         to_remove = np.abs(y.shape[1] - yk.shape[1])
-                        if len(y) > len(yk):
+                        if y.shape[1] > yk.shape[1]:
                             # shave off the last few samples to compare to har 21
-                            y = y[:, :-to_remove]
-                            yp = yp[:, :-to_remove]
+                            y = y[:, to_remove:]
+                            yp = yp[:, to_remove:]
                         else:
                             # shave off the last few samples to compare to har 21
-                            yk = yk[:, :-to_remove]
-                            ypk = ypk[:, :-to_remove]
+                            yk = yk[:, to_remove:]
+                            ypk = ypk[:, to_remove:]
                     # assert (np.array_equal(y, yk))
                     # XXX: Now we can do Diebold mariano test
                     try:
@@ -1420,7 +1422,7 @@ if __name__ == '__main__':
     plt.style.use('seaborn-v0_8-whitegrid')
     # XXX: model vs model
     # for otype in ['call', 'put']:
-        # model_v_model(otype)
+    #     model_v_model(otype)
         # p = multiprocessing.Process(target=model_v_model, args=(otype))
         # p.start()
         # p.join()
