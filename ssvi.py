@@ -7,11 +7,15 @@ from pred import SSVI
 import matplotlib.pyplot as plt
 # from statsmodels.stats.diagnostic import het_arch
 from sklearn.linear_model import Ridge
+from xgboost import XGBRegressor
 from sklearn.metrics import r2_score
 from joblib import Parallel, delayed
 from sklearn.utils.validation import check_is_fitted
 from sklearn.exceptions import NotFittedError
 from pred import cr2_score, cr2_score_pval
+from keras.layers import Input, LSTM
+from keras.models import Model
+import keras
 
 
 def load_data(otype, dd='./figs', START='20020208', NUM_IMAGES=2000):
@@ -75,7 +79,7 @@ def fitandforecastARIMA(Y, trend='n', N=1000000):
     SCALE = 1
     dY = np.diff(Y)
     from statsmodels.tsa.statespace.sarimax import SARIMAX
-    # XXX: ARMA on differenced series
+    # XXX: ARMA on differenced series := ARIMA
     # df = rpm + ram
     model_fit = SARIMAX(dY*SCALE, order=(rpm, 0, ram), trend=trend,
                         ).fit(maxiter=10000, disp=False,
@@ -99,12 +103,12 @@ def fitandforecastARIMA(Y, trend='n', N=1000000):
               np.power(SCALE, 2))**0.5
 
     # XXX: We have removed auto-corellation, but the std_resid still
-    # have kurtosis -- so use a StudentsT distribution.
+    # have kurtosis -- so we use a StudentsT distribution.
 
-    # XXX: Total return for the shifted and scaled normal distribution
+    # XXX: Total return for the shifted and scaled StudentsT
+    # distribution
     ret = np.mean(retmean + retvar *
                   np.random.standard_t(df=model_fit.params['nu'], size=N))
-    # ret = np.mean(np.random.normal(loc=retmean, scale=retvar, size=N))
 
     # from statsmodels.stats.diagnostic import acorr_ljungbox
     # ress = acorr_ljungbox(model_fit.std_resid, model_df=df)
@@ -120,12 +124,12 @@ def fitandforecastARIMA(Y, trend='n', N=1000000):
 
 
 def doARIMA(params, WINDOW):
+    import warnings
+    from statsmodels.tools.sm_exceptions import ConvergenceWarning
+    warnings.filterwarnings(action='ignore', category=ConvergenceWarning)
 
     rho = pd.DataFrame(params[:, 0])
     nu = pd.DataFrame(params[:, 1])
-
-    # XXX: For nu p=4, d=1, q=1
-    # XXX: For rho p=3, d=1, q=1
 
     prho = rho.rolling(WINDOW).apply(
         lambda x:
@@ -141,6 +145,152 @@ def doARIMA(params, WINDOW):
 
     print(prho.shape, pnu.shape)
     return pd.DataFrame({'rho': prho[:-1], 'nu': pnu[:-1]})
+
+
+def doLGBM(params, WINDOW, TSTEP):
+    import warnings
+    warnings.filterwarnings(action='ignore', category=UserWarning)
+
+    def fitandforecastLGBM(aa, TSTEP):
+        da = np.diff(aa, axis=0)
+        da = np.vstack((da[0, :], da))  # Just replicated the first one.
+        Y = list()
+        for i in range(da.shape[0]):
+            if i > 0 and i % TSTEP == 0:
+                Y.append(da[i])
+        Y = np.array(Y)
+        Y1 = Y[:, 0]            # rho
+        Y2 = Y[:, 1]            # nu
+        X1 = da[:, 0]           # rho lags
+        X1 = X1.reshape(X1.shape[0]//TSTEP, TSTEP)
+        X2 = da[:, 1]           # nu lags
+        X2 = X2.reshape(X2.shape[0]//TSTEP, TSTEP)
+        # XXX: Differenced lags with regularisation
+        m1 = XGBRegressor(verbosity=0, subsample=0.1,
+                          booster='gblinear').fit(X1[:-1], Y1)
+        m2 = XGBRegressor(verbosity=0, subsample=0.1,
+                          booster='gblinear').fit(X2[:-1], Y2)
+        r1 = m1.predict(X1[-1].reshape(1, X1[-1].shape[0]))
+        r2 = m2.predict(X2[-1].reshape(1, X2[-1].shape[0]))
+        return r1[0]+aa[-1, 0], r2[0]+aa[-1, 1]
+
+    # rho = params[:, 0]
+    # nu = params[:, 1]
+
+    prho = list()
+    pnu = list()
+    # assert (rho.shape == nu.shape)
+    N = params.shape[0]
+    for i in range(N-WINDOW):
+        if i % 100 == 0:
+            print('Rho/Nu Done: ', i)
+        aa = params[i:WINDOW+i]
+        yy1, yy2 = fitandforecastLGBM(aa, TSTEP)
+        prho.append(yy1)
+        pnu.append(yy2)
+
+    return pd.DataFrame({'rho': prho, 'nu': pnu})
+
+
+def doLSTM(params, WINDOW, TSTEP):
+
+    def buildKeras(TSTEP, batch_size, trainX, trainY, epochs=500,
+                   LR=1e-3, validation_split=0.05,
+                   activation='tanh'):
+        inp = Input(shape=(TSTEP, 1), batch_size=batch_size)
+        l1 = LSTM(1, stateful=True, return_sequences=True,
+                  activation=activation)(inp)
+        # XXX: Just one final output
+        l2 = LSTM(1, stateful=True, return_sequences=False,
+                  activation=activation)(l1)
+        # l3 = keras.layers.Dense(1)(l1)
+        model = Model(inp, l2)
+        model.compile(loss=keras.losses.mean_squared_error,
+                      optimizer=keras.optimizers.Adam(learning_rate=LR))
+        print(model.summary())
+        # Define some callbacks to improve training.
+        early_stopping = keras.callbacks.EarlyStopping(
+            monitor="val_loss", patience=100, restore_best_weights=True)
+        reduce_lr = keras.callbacks.ReduceLROnPlateau(monitor="val_loss",
+                                                      patience=5)
+        # Fit the model to the training data.
+        for i in range(epochs):
+            history = model.fit(
+                trainX,
+                trainY,
+                batch_size=1,
+                epochs=1,
+                verbose=0,
+                validation_split=validation_split,
+                shuffle=False,
+                callbacks=[early_stopping, reduce_lr])
+            model.get_layer(index=1).reset_states()
+            # model.get_layer(index=2).reset_states()
+        return model, history
+
+    def fitandforecastLSTM(aa, TSTEP, m1, m2):
+        # from sklearn.preprocessing import MinMaxScaler
+        # scaler = MinMaxScaler(feature_range=(-1, 1))
+        # da = np.diff(aa, axis=0)
+        # da = np.vstack((da[0, :], da))  # Just replicated the first one.
+        # da = scaler.fit_transform(aa)   # Transform to between 1 and -1
+        da = aa   # Transform to between 1 and -1
+        Y = list()
+        for i in range(da.shape[0]):
+            if i > 0 and i % TSTEP == 0:
+                Y.append(da[i])
+        Y = np.array(Y)
+        Y1 = Y[:, 0]            # diff-rho
+        Y2 = Y[:, 1]            # diff-nu
+
+        X1 = da[:, 0]           # rho lags
+        # XXX: shape = (batch_size, timesteps, features)
+        X1 = X1.reshape(X1.shape[0]//TSTEP, TSTEP, 1)
+
+        X2 = da[:, 1]           # nu lags
+        # XXX: shape = (batch_size, timesteps, features)
+        X2 = X2.reshape(X2.shape[0]//TSTEP, TSTEP, 1)
+
+        if m1 is None:
+            print('m1 is None so training the LSTM')
+            # XXX: Differenced lags with regularisation
+            m1, h1 = buildKeras(TSTEP, 1, X1[:-1], Y1)
+        # XXX: Predict the output
+        r1 = m1.predict(X1[-1].reshape(X1[-1].shape[0], 1),
+                        batch_size=1, verbose=0)
+        # m1.get_layer(index=1).reset_states()
+
+        # m1.get_layer(index=2).reset_states()
+        if m2 is None:
+            print('m2 is None so training the LSTM')
+            m2, h2 = buildKeras(TSTEP, 1, X2[:-1], Y2,
+                                activation='tanh')
+
+        r2 = m2.predict(X2[-1].reshape(X2[-1].shape[0], 1),
+                        batch_size=1, verbose=0)
+        # m2.get_layer(index=1).reset_states()
+        # m2.get_layer(index=2).reset_states()
+        # rs = scaler.inverse_transform([[r1[0, 0], r2[0, 0]]])
+        return r1[-1, 0], r2[-1, 0], m1, m2
+
+    # rho = params[:, 0]
+    # nu = params[:, 1]
+
+    prho = list()
+    pnu = list()
+    # assert (rho.shape == nu.shape)
+    N = params.shape[0]
+    m1 = None
+    m2 = None
+    for i in range(N-WINDOW):
+        if i % 100 == 0:
+            print('LSTM done: ', i)
+        aa = params[i:WINDOW+i]
+        yy1, yy2, m1, m2 = fitandforecastLSTM(aa, TSTEP, m1, m2)
+        prho.append(yy1)
+        pnu.append(yy2)
+
+    return pd.DataFrame({'rho': prho, 'nu': pnu})
 
 
 def doATMIV(atmiv, WINDOW, TSTEP):
@@ -202,7 +352,7 @@ def doSSVI(X, WINDOW, TSTEP):
     return np.array(pY)
 
 
-def doRidge(X, WINDOW, TSTEP):
+def doModel(X, WINDOW, TSTEP):
     def doit(ivs, ridge):
         # XXX: Get the outputs
         Y = list()
@@ -265,14 +415,53 @@ def main():
         ssvi = SSVI('ssviridge', TSTEP)
         params, ATM_IV = ssvi.fitY(X['IVS'])
 
-        # XXX: Get the ATM_IV predictions
+        # XXX: Get the ATM_IV predictions FIXME: We need to make sure
+        # that dATM_IV/dt >= 0, so first first fit the term structure @
+        # ATM_IV with NS and then predict the parameters of NS.
         pY = doATMIV(ATM_IV, WINDOW, TSTEP=TSTEP)
         print(ATM_IV[WINDOW:].shape, pY.shape)
         print('R2 score ATM: ', r2_score(ATM_IV[WINDOW:], pY))
 
+        # XXX: Predict the parameters using LSTM NN
+        pparams = doLSTM(params, WINDOW, TSTEP)
+        print('R2 score rho: ', r2_score(params[WINDOW:, 0], pparams['rho']))
+        print('R2 score nu: ', r2_score(params[WINDOW:, 1], pparams['nu']))
+
+        # XXX: Predict the IVS using LSTM models
+        plY = Parallel(n_jobs=-1)(delayed(ssvi.predict1)(
+            pparams.loc[i, :], pY[i])
+                                  for i in range(pY.shape[0]))
+        plY = np.array(plY)
+        plY = plY.reshape(plY.shape[0], plY.shape[1]*plY.shape[2])
+        # XXX: interpolate nan values!
+        mask = np.isnan(plY)
+        if (mask.sum() > 0):
+            print('Nan values in prediction: ', mask.sum())
+            plY[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
+                                  plY[~mask])
+        print('R2 score LSTM: ', r2_score(yT, plY))
+
+        # XXX: Predict the parameters using light gbm/XGBBoost
+        pparams = doLGBM(params, WINDOW, TSTEP)
+        print('R2 score rho: ', r2_score(params[WINDOW:, 0], pparams['rho']))
+        print('R2 score nu: ', r2_score(params[WINDOW:, 1], pparams['nu']))
+
+        # XXX: Predict the IVS using LGBM models
+        pgY = Parallel(n_jobs=-1)(delayed(ssvi.predict1)(
+            pparams.loc[i, :], pY[i])
+                                  for i in range(pY.shape[0]))
+        pgY = np.array(pgY)
+        pgY = pgY.reshape(pgY.shape[0], pgY.shape[1]*pgY.shape[2])
+        # XXX: interpolate nan values!
+        mask = np.isnan(pgY)
+        if (mask.sum() > 0):
+            print('Nan values in prediction: ', mask.sum())
+            pgY[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
+                                  pgY[~mask])
+        print('R2 score XGBoost: ', r2_score(yT, pgY))
+
         # XXX: Now try this same thing with ARIMA
         pparams = doARIMA(params, WINDOW)
-        print(params[WINDOW:].shape, pparams.shape)
         print('R2 score rho: ', r2_score(params[WINDOW:, 0], pparams['rho']))
         print('R2 score nu: ', r2_score(params[WINDOW:, 1], pparams['nu']))
 
@@ -282,11 +471,11 @@ def main():
                                   for i in range(pY.shape[0]))
         paY = np.array(paY)
         paY = paY.reshape(paY.shape[0], paY.shape[1]*paY.shape[2])
-        print('R2 score ARIMA: ', r2_score(yT, paY))
+        print('R2 score ARIMA-GARCH: ', r2_score(yT, paY))
 
-        # XXX: Ridge fit (VAR model)
-        prY = doRidge(X, WINDOW, TSTEP=TSTEP)
-        print('R2 score Ridge: ', r2_score(yT, prY))
+        # XXX: Model fit (AR model)
+        prY = doModel(X, WINDOW, TSTEP=TSTEP)
+        print('R2 score %s:' % r2_score(yT, prY))
 
         # XXX: Fit using the standard technique
         psY = doSSVI(X, WINDOW, TSTEP=TSTEP)
@@ -302,12 +491,24 @@ def main():
         print('R2 score SSVI: ', r2_score(yT, psY))
 
         # XXX: Compare the R2 scores VAR R2 vs SSVI ARIMA
-        print('Ridge vs ARIMA SSVI: ', cr2_score(yT, prY, paY))
-        print('Ridge vs ARIMA SSVI p-val: ', cr2_score_pval(yT, prY, paY))
+        print('Ridge vs ARIMA-GARCH SSVI: ', cr2_score(yT, prY, paY))
+        print('Ridge vs ARIMA-GARCH SSVI p-val: ',
+              cr2_score_pval(yT, prY, paY))
 
         # XXX: Compare the R2 scores Ridge SSVI vs SSVI ARIMA
-        print('Ridge SSVI vs ARIMA SSVI: ', cr2_score(yT, psY, paY))
-        print('Ridge vs ARIMA SSVI p-val: ', cr2_score_pval(yT, psY, paY))
+        print('Ridge SSVI vs ARIMA-GARCH SSVI: ', cr2_score(yT, psY, paY))
+        print('Ridge SSVI vs ARIMA-GARCH SSVI p-val: ',
+              cr2_score_pval(yT, psY, paY))
+
+        # XXX: Compare XGBoost vs ARIMA-GARCH
+        print('XGBoost SSVI vs ARIMA-GARCH SSVI: ', cr2_score(yT, pgY, paY))
+        print('XGBoost SSVI vs ARIMA-GARCH SSVI p-val: ',
+              cr2_score_pval(yT, pgY, paY))
+
+        # XXX: Compare LSTM vs ARIMA-GARCH
+        print('LSTM SSVI vs ARIMA-GARCH SSVI: ', cr2_score(yT, plY, paY))
+        print('LSTM SSVI vs ARIMA-GARCH SSVI p-val: ',
+              cr2_score_pval(yT, plY, paY))
 
 
 if __name__ == '__main__':

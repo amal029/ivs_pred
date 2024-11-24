@@ -577,16 +577,18 @@ def model_v_model(otype):
     models = [
         r'ctridge', r'ctlasso', r'ctenet',
         r'ssviridge', r'ssvilasso', r'ssvienet',
-        'msknsridge', 'mskenet', 'msknslasso', 'msknsenet',
-        'tsknsridge', 'tsknslasso', 'tsknsenet',
-        'mskplslasso', 'mskplsridge', 'mskplsenet',
-        'msklasso', 'ridge', 'lasso',
-        'enet', 'plsridge', 'plslasso', 'plsenet',
-        'pmridge', 'pmlasso', 'pmenet', 'pmplsridge',
-        'pmplslasso', 'pmplsenet',
-        'mskridge', 'tskridge',
-        'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
-        'tskplsenet']
+
+        # 'msknsridge', 'mskenet', 'msknslasso', 'msknsenet',
+        # 'tsknsridge', 'tsknslasso', 'tsknsenet',
+        # 'mskplslasso', 'mskplsridge', 'mskplsenet',
+        # 'msklasso', 'ridge', 'lasso',
+        # 'enet', 'plsridge', 'plslasso', 'plsenet',
+        # 'pmridge', 'pmlasso', 'pmenet', 'pmplsridge',
+        # 'pmplslasso', 'pmplsenet',
+        # 'mskridge', 'tskridge',
+        # 'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
+        # 'tskplsenet'
+    ]
     fp = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
                                                              len(models))
           for t in TTS}
@@ -608,17 +610,19 @@ def model_v_model(otype):
                 blosc2.save_array(res, tosave, mode='w')
 
 
-def call_dmtest(otype):
+def call_dmtest(otype, mmodel, models):
     TTS = [10, 20, 5]
-    models = ['ssviridge', 'lasso', 'enet', 'plsridge', 'plslasso', 'plsenet',
-              'pmlasso', 'pmenet', 'pmplsridge', 'pmplslasso',
-              'pmplsenet', 'msklasso', 'mskenet', 'mskplsridge', 'mskplslasso',
-              'mskplsenet', 'msknsridge', 'msknslasso', 'msknsenet',
-              'ctridge', 'ctlasso', 'ctenet',
-              'ssvilasso', 'ssvienet',
-              'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
-              'tskplsenet', 'tsknsridge', 'tsknslasso', 'tsknsenet',
-              'ridge', 'mskridge', 'pmridge', 'tskridge']
+    # models = ['ssviridge', 'lasso', 'enet', 'plsridge', 'plslasso',
+    # 'plsenet',
+    #           'pmlasso', 'pmenet', 'pmplsridge', 'pmplslasso',
+    #           'pmplsenet', 'msklasso', 'mskenet', 'mskplsridge',
+    # 'mskplslasso',
+    #           'mskplsenet', 'msknsridge', 'msknslasso', 'msknsenet',
+    #           'ctridge', 'ctlasso', 'ctenet',
+    #           'ssvilasso', 'ssvienet',
+    #           'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
+    #           'tskplsenet', 'tsknsridge', 'tsknslasso', 'tsknsenet',
+    #           'ridge', 'mskridge', 'pmridge', 'tskridge']
     fp = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
                                                              len(models))
           for t in TTS}
@@ -645,12 +649,6 @@ def call_dmtest(otype):
                 print('Doing %d: %s' % (i, name1))
                 if cache[dd][ts][models[i]] is None:
                     y, yp = getpreds(name1)
-                    mask = np.isnan(yp)
-                    if (mask.sum() > 0):
-                        print('Nan values in prediction: ', mask.sum())
-                        yp[mask] = np.interp(np.flatnonzero(mask),
-                                             np.flatnonzero(~mask),
-                                             yp[~mask])
                     cache[dd][ts][models[i]] = (y, yp)
                 else:
                     y, yp = cache[dd][ts][models[i]]
@@ -661,15 +659,22 @@ def call_dmtest(otype):
                     print('Doing %d: %s' % (j, name2))
                     if cache[dd][ts][models[j]] is None:
                         yk, ypk = getpreds(name2)
-                        mask = np.isnan(ypk)
-                        if (mask.sum() > 0):
-                            print('Nan values in prediction: ', mask.sum())
-                            yp[mask] = np.interp(np.flatnonzero(mask),
-                                                 np.flatnonzero(~mask),
-                                                 ypk[~mask])
                         cache[dd][ts][models[j]] = (yk, ypk)
                     else:
                         yk, ypk = cache[dd][ts][models[j]]
+                    # XXX: Remove the NaN values
+                    mask = np.isnan(yp)
+                    if (mask.sum() > 0):
+                        print('Nan values in YP prediction: ', mask.sum())
+                        yp[mask] = np.interp(np.flatnonzero(mask),
+                                             np.flatnonzero(~mask),
+                                             yp[~mask])
+                    mask = np.isnan(ypk)
+                    if (mask.sum() > 0):
+                        print('Nan values in YPK prediction: ', mask.sum())
+                        ypk[mask] = np.interp(np.flatnonzero(mask),
+                                              np.flatnonzero(~mask),
+                                              ypk[~mask])
                     assert (np.array_equal(y, yk))
                     # XXX: Now we can do Diebold mariano test
                     try:
@@ -681,17 +686,22 @@ def call_dmtest(otype):
                     # XXX: We have to transpose these, because they are
                     # transposed in getpreds!
                     r2v[ts][i][j] = cr2_score(y.T, yp.T, ypk.T)*100
-                    r2p[ts][i][j] = cr2_score_pval(y.T, yp.T, ypk.T)
+                    r2p[ts][i][j] = cr2_score_pval(y.T, yp.T, ypk.T,
+                                                   greater=False)
         # XXX: Save the results of dmtest
         header = ','.join(models)
         for t in fp.keys():
-            np.savetxt('./plots/pval_%s_%s_%s_rmse.csv' % (otype, t, dd),
+            np.savetxt('./plots/pval_%s_%s_%s_%s_rmse.csv' % (otype, t, dd,
+                                                              mmodel),
                        fp[t], delimiter=',', header=header)
-            np.savetxt('./plots/dstat_%s_%s_%s_rmse.csv' % (otype, t, dd),
+            np.savetxt('./plots/dstat_%s_%s_%s_%s_rmse.csv' % (otype, t, dd,
+                                                               mmodel),
                        fd[t], delimiter=',', header=header)
-            np.savetxt('./plots/r2cmp_%s_%s_%s.csv' % (otype, t, dd),
+            np.savetxt('./plots/r2cmp_%s_%s_%s_%s.csv' % (otype, t, dd,
+                                                          mmodel),
                        r2v[t], delimiter=',', header=header)
-            np.savetxt('./plots/r2cmp_pval_%s_%s_%s.csv' % (otype, t, dd),
+            np.savetxt('./plots/r2cmp_pval_%s_%s_%s_%s.csv' % (otype, t, dd,
+                                                               mmodel),
                        r2p[t], delimiter=',', header=header)
 
 
@@ -1066,19 +1076,47 @@ if __name__ == '__main__':
     # for otype in ['call', 'put']:
     #     model_v_model(otype)
 
+    # XXX: Point ridge models -- Peter add other models here
+    point_ridge = {'point_ridge': ['pmridge', 'pmplsridge']}
+    point_lasso = {'point_lasso': ['pmlasso', 'pmplslasso']}
+    point_enet = {'point_enet': ['pmenet', 'pmplsenet']}
+
+    # XXX: Skew models -- Peter add other models here
+    skew_ridge = {'skew_ridge': ['mskridge', 'mskplsridge', 'msknsridge']}
+    skew_lasso = {'skew_lasso': ['msklasso', 'mskplslasso', 'msknslasso']}
+    skew_enet = {'skew_enet': ['mskenet', 'mskplsenet', 'msknsenet']}
+
+    # XXX: Term structure models -- Peter add other models here
+    ts_ridge = {'termstructure_ridge':
+                ['tskridge', 'tskplsridge', 'tsknsridge']}
+    ts_lasso = {'termstructure_lasso':
+                ['tsklasso', 'tskplslasso', 'tsknslasso']}
+    ts_enet = {'termstructure_enet':
+               ['tskenet', 'tskplsenet', 'tsknsenet']}
+
+    # XXX: Surface models -- Peter add other models here
+    surf_ridge = {'surf_ridge': ['ridge', 'plsridge', 'ctridge', 'ssviridge']}
+    surf_lasso = {'surf_lasso': ['lasso', 'plslasso', 'ctlasso', 'ssvilasso']}
+    surf_enet = {'surf_enet': ['enet', 'plsenet', 'ctenet', 'ssvienet']}
+
     # for otype in ['call', 'put']:
     #     # XXX: Plot the bar graph for overall results
     #     call_overall(otype)
     #     # XXX: Plot the best time series RMSE and MAPE
     #     call_timeseries(otype)
 
-    # for otype in ['call', 'put']:
-    #     # XXX: DM test across time (RMSE)
-    #     call_dmtest(otype)
+    for otype in ['call', 'put']:
+        for i in [surf_ridge, point_ridge, point_lasso, point_enet,
+                  skew_ridge, skew_lasso, skew_enet,
+                  ts_ridge, ts_lasso, ts_enet,
+                  surf_lasso, surf_enet]:
+            # XXX: DM test across time (RMSE)
+            model, models = list(i.keys())[0], list(i.values())[0]
+            call_dmtest(otype, model, models)
 
     # XXX: r2_score for moneyness and term structure
-    for otype in ['call', 'put']:
-        r2_rmse_score_mt(otype)
+    # for otype in ['call', 'put']:
+    #     r2_rmse_score_mt(otype)
 
     # for otype in ['call', 'put']:
     #     direction(otype)
@@ -1087,3 +1125,94 @@ if __name__ == '__main__':
     # usually there is literally no difference.
     # for otype in ['call', 'put']:
     #     lag_test(otype)
+
+    # XXX: The statistics for the complete dataset
+    # cdfm = list()
+    # cdft = list()
+    # cdfiv = list()
+    # pdft = list()
+    # pdfm = list()
+    # pdfiv = list()
+    # for i, f in enumerate(sorted(glob.glob('./interest_rates/*.csv'))):
+    #     df = pd.read_csv(f)
+    #     dfc = df[df['Type'] == 'call']
+    #     # XXX: Print statistics for call options
+    #     cdfm.append(list(dfc['m'].values))
+    #     cdft.append(list(dfc['tau'].values))
+    #     cdfiv.append(list(dfc['IV'].values))
+    #     # XXX: Print statistics for put options
+    #     dfp = df[df['Type'] == 'put']
+    #     pdft.append(list(dfp['tau'].values))
+    #     pdfm.append(list(dfp['m'].values))
+    #     pdfiv.append(list(dfp['IV'].values))
+
+    # XXX: Flatten the lists
+    # cdfm = [j for i in cdfm for j in i]
+    # cdft = [j for i in cdft for j in i]
+    # cdfiv = [j for i in cdfiv for j in i]
+    # pdfm = [j for i in pdfm for j in i]
+    # pdft = [j for i in pdft for j in i]
+    # pdfiv = [j for i in pdfiv for j in i]
+
+    # XXX: Turn into dataframe
+    # cdft = pd.DataFrame(cdft)
+    # cdfm = pd.DataFrame(cdfm)
+    # cdfiv = pd.DataFrame(cdfiv)
+    # cdf = pd.DataFrame({'Moneyness': cdfm, 'Time-to-maturity': cdft,
+    #                     'Implied Volatility': cdfiv})
+    # cdf = cdf[cdf['Implied Volatility'] > 0]
+    # pdfm = pd.DataFrame(pdfm)
+    # pdft = pd.DataFrame(pdft)
+    # pdfiv = pd.DataFrame(pdfiv)
+    # pdf = pd.DataFrame({'Moneyness': pdfm, 'Time-to-maturity': pdft,
+    #                     'Implied Volatility': pdfiv})
+    # pdf = pdf[pdf['Implied Volatility'] > 0]
+    # XXX: Print the statistics
+    # print('Call moneyness: ', cdfm.describe())
+    # print('Call maturity: ', cdft.describe())
+    # print('Call IV: ', cdfiv.describe())
+    # print('Put moneyness: ', pdfm.describe())
+    # print('Put maturity: ', pdft.describe())
+    # print('Put IV: ', pdfiv.describe())
+    # cdf.describe().T.to_latex(buf='../feature_paper/elsarticle/figs/callstats.tex',
+    #                           header=['Count', 'Mean',
+    #                                   'Std', 'Min', '25%', '50%', '75%',
+    #                                   'Max'])
+    # pdf.describe().T.to_latex(buf='../feature_paper/elsarticle/figs/putstats.tex',
+    #                           header=['Count', 'Mean',
+    #                                   'Std', 'Min', '25%', '50%', '75%',
+    #                                   'Max'])
+
+    # XXX: ITM/ATM/OTM
+    # citm = cdf[cdf['Moneyness'] <= 0.99]
+    # catm = cdf[((cdf['Moneyness'] > 0.99) & (cdf['Moneyness'] <= 1.01))]
+    # cotm = cdf[cdf['Moneyness'] > 1.01]
+    # print('Call ITM', citm.shape[0])
+    # print('Call ATM', catm.shape[0])
+    # print('Call OTM', cotm.shape[0])
+
+    # XXX: Term structure
+    # cst = cdf[cdf['Time-to-maturity'] < 90/365]
+    # cmt = cdf[((cdf['Time-to-maturity'] >= 90/365) &
+    #            (cdf['Time-to-maturity'] < 180/365))]
+    # clt = cdf[cdf['Time-to-maturity'] >= 180/365]
+    # print('Call ST', cst.shape[0])
+    # print('Call MT', cmt.shape[0])
+    # print('Call LT', clt.shape[0])
+
+    # XXX: ITM/ATM/OTM
+    # pitm = pdf[pdf['Moneyness'] <= 0.99]
+    # patm = pdf[((pdf['Moneyness'] > 0.99) & (pdf['Moneyness'] <= 1.01))]
+    # potm = pdf[pdf['Moneyness'] > 1.01]
+    # print('Put ITM', pitm.shape[0])
+    # print('Put ATM', patm.shape[0])
+    # print('Put OTM', potm.shape[0])
+
+    # XXX: Term structure
+    # pst = pdf[pdf['Time-to-maturity'] < 90/365]
+    # pmt = pdf[((pdf['Time-to-maturity'] >= 90/365) &
+    #            (pdf['Time-to-maturity'] < 180/365))]
+    # plt = pdf[pdf['Time-to-maturity'] >= 180/365]
+    # print('Put ST', pst.shape[0])
+    # print('Put MT', pmt.shape[0])
+    # print('Put LT', plt.shape[0])

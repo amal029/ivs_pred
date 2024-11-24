@@ -600,39 +600,66 @@ def plot_hmap(ivs_hmap, mrows, tcols, otype, dd='figs'):
 def plot_ivs(ivs_surface, IVS='IVS', view='XY'):
     for k in ivs_surface.keys():
         fig = plt.figure()
-        ax = fig.add_subplot(projection='3d')
+        ax = fig.add_subplot(1, 1, 1, projection='3d')
         X = ivs_surface[k]['m']
         Y = ivs_surface[k]['tau']
         if IVS == 'IVS':
-            Z = ivs_surface[k][IVS]*100
+            Z = ivs_surface[k][IVS]
         else:
             Z = ivs_surface[k][IVS]
             # viridis = cm.get_cmap('gist_gray', 256)
-        _ = ax.plot_trisurf(X, Y, Z, cmap='afmhot',
+        _ = ax.plot_trisurf(X, Y, Z, cmap='viridis',
                             linewidth=0.2, antialiased=True)
-        # ax.set_xlabel('m')
-        # ax.set_ylabel('tau')
-        # ax.set_zlabel(IVS)
-        # ax.view_init(azim=-45, elev=30)
-        # ax.invert_xaxis()
-        # ax.invert_yaxis()
-        if view == 'XY':
-            ax.view_init(elev=90, azim=-90)
-        elif view == 'XZ':
-            ax.view_init(elev=0, azim=-90)
-        elif view == 'YZ':
-            ax.view_init(elev=0, azim=0)
-            ax.axis('off')
-            # ax.zaxis.set_major_formatter('{x:.02f}')
-            # fig.colorbar(surf, shrink=0.5, aspect=5)
-            # plt.show()
-            # fig.subplots_adjust(bottom=0)
-            # fig.subplots_adjust(top=0.00001)
-            # fig.subplots_adjust(right=1)
-            # fig.subplots_adjust(left=0)
-        plt.savefig('/tmp/figs/{k}_{v}.png'.format(k=k, v=view),
+        ax.set_xlabel(r'$m = K/S_{0}$')
+        ax.set_ylabel(r'$\tau$')
+        ax.set_zlabel('IV')
+        ax.view_init(azim=-45, elev=30)
+        ax.zaxis.set_major_formatter('{x:.02f}')
+        plt.savefig('/tmp/figs/{k}_{v}.pdf'.format(k=k, v=view),
                     bbox_inches='tight', pad_inches=0)
         plt.close(fig)
+
+        # XXX: Plot term structure only
+        ivs_itm = ivs_surface[k][ivs_surface[k]['m'] == 0.9]
+        ivs_atm = ivs_surface[k][((ivs_surface[k]['m'] >= 0.9999) &
+                                  (ivs_surface[k]['m'] <= 1.0))]
+        ivs_otm = ivs_surface[k][ivs_surface[k]['m'] >= 1.10313]
+        fig = plt.figure()
+        ax = fig.add_subplot()
+        l1, = ax.plot(ivs_itm['tau'], ivs_itm[IVS], marker='*',
+                      markevery=0.1, label='ITM')
+        l2, = ax.plot(ivs_atm['tau'], ivs_atm[IVS], marker='+',
+                      markevery=0.1, label='ATM')
+        l3, = ax.plot(ivs_otm['tau'], ivs_otm[IVS], marker='o',
+                      markevery=0.1, label='OTM')
+        ax.set_xlabel(r'$\tau$')
+        ax.set_ylabel(r'$IV$')
+        ax.legend(handles=[l1, l2, l3])
+
+        plt.savefig('/tmp/figs/{k}_termstructure.pdf'.format(k=k),
+                    bbox_inches='tight', pad_inches=0)
+        plt.close(fig)
+
+        # XXX: Plot moneyness skew only
+        ivs_st = ivs_surface[k][ivs_surface[k]['tau'] == (14/365)]
+        ivs_mt = ivs_surface[k][ivs_surface[k]['tau'] == (99/365)]
+        ivs_lt = ivs_surface[k][ivs_surface[k]['tau'] == (359/365)]
+        fig = plt.figure()
+        ax = fig.add_subplot()
+        l1, = ax.plot(ivs_st['m'], ivs_st[IVS], marker='*',
+                      markevery=0.1, label='Short-term')
+        l2, = ax.plot(ivs_mt['m'], ivs_mt[IVS], marker='+',
+                      markevery=0.1, label='Medium-term')
+        l3, = ax.plot(ivs_lt['m'], ivs_lt[IVS], marker='o',
+                      markevery=0.1, label='Long-term')
+        ax.set_xlabel(r'$m$')
+        ax.set_ylabel(r'$IV$')
+        ax.legend(handles=[l1, l2, l3])
+
+        plt.savefig('/tmp/figs/{k}_skew.pdf'.format(k=k),
+                    bbox_inches='tight', pad_inches=0)
+        plt.close(fig)
+
         # XXX: Convert to gray scale 1 channel only
         # img = Image.open('/tmp/figs/{k}.png'.format(k=k)).convert('LA')
         # img.save('/tmp/figs/{k}.png'.format(k=k))
@@ -866,15 +893,15 @@ def build_gird_and_images(df, otype):
         # print('ivs hmap shape: ', ivs_surf_hmap[k].shape)
 
     # XXX: Plot the heatmap
-    plot_hmap(ivs_surf_hmap, mms, tts, otype)
+    # plot_hmap(ivs_surf_hmap, mms, tts, otype)
 
     # XXX: Plot the ivs surface
-    # plot_ivs(ivs_surface, view='XY')
+    plot_ivs(ivs_surface, view='XY')
 
 
 def excel_to_images(dvf=True, otype='call', ironly=False):
     dir = '../../HistoricalOptionsData/'
-    years = [str(i) for i in range(2002, 2024)]
+    years = [str(i) for i in range(2002, 2003)]
     months = [
         'January', 'February',
         'March',
@@ -1512,7 +1539,7 @@ def linear_fit(otype):
     for j in ['./figs', './gfigs']:
         for i in [5, 20, 10]:
             for k in ['ssviridge', 'ssvilasso', 'ssvienet',
-                      # 'ctridge', 'ctlasso', 'ctenet',
+                      'ctridge', 'ctlasso', 'ctenet',
                       # 'plsenet', 'plsridge', 'plslasso',
                       # 'Ridge', 'Lasso', 'ElasticNet'
                       ]:

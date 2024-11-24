@@ -151,7 +151,7 @@ def dm_test(
     one_sided: bool If set to true, returns the p-value for a one-sided
         test instead of a two-sided test. Default is false.
 
-    harvey_correcetion: bool If set to true, uses a modified test
+    harvey_correction: bool If set to true, uses a modified test
         statistics as per Harvey, Leybourne and Newbold (1997).
 
     Returns ------- A tuple of two values. The first is the test
