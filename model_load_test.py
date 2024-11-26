@@ -40,6 +40,61 @@ def load_image(num, dd='./figs'):
     img = np.load(ff[num])
     return img
 
+def extract_features(X, model, dd, TSTEPS, feature_res, m=0, t=0, type='mskew', otype='call'):
+    """
+    Returns the features extracted from the input data ready for prediction
+    using corrisponding model
+    """
+
+    import feature_extraction as fe
+    transform_type = type[1:]
+    model = model[-3:]
+    if(model == 'pca'):
+        if type == 'point':
+            n_components = (TSTEPS//2)
+        else:
+            num_points = X.shape[1]//TSTEPS
+            n_components = (TSTEPS//2) * num_points 
+
+        X = fe.pca_transform(X, n_components)
+    elif(model == 'autoencoder' or model == 'vae'):
+
+        # Load the encoder model
+        if type=='point':
+            if dd == './figs':
+                toopen = './%s_feature_models/%s_ts_%s_%s_%s_%s_encoder.keras' % (type, model, TSTEPS, m, t, otype)
+            else:
+                toopen = './%s_feature_models/%s_ts_%s_%s_%s_%s_encoder_gfigs.keras' % (type, model, TSTEPS, m, t, otype)
+        elif type=='surf':
+            if dd == './figs':
+                toopen = './%s_feature_models/%s_ts_%s_%s_encoder.keras' % (type, model, TSTEPS, otype)
+            else:
+                toopen = './%s_feature_models/%s_ts_%s_%s_encoder_gfigs.keras' % (type, model, TSTEPS, otype)
+        else:
+            if dd == './figs':
+                toopen = './%s_feature_models/%s_ts_%s_%s_%s_encoder.keras' % (type, model, TSTEPS, m, otype)
+            else:
+                toopen = './%s_feature_models/%s_ts_%s_%s_%s_encoder_gfigs.keras' % (type, model, TSTEPS, m, otype)
+        
+
+        vae = True
+        # Get encoder
+        if model == 'autoencoder':
+            encoder = keras.saving.load_model(toopen) 
+            vae = False
+            encoder = keras.Model(inputs=encoder.input, outputs=encoder.layers[1].output)
+        else:
+            encoder = keras.saving.load_model(toopen, custom_objects={'VAE': fe.VAE, 'Sampling': fe.Sampling})
+
+        X = fe.autoencoder_transform(encoder, X, vae=vae)
+        del encoder
+    else:
+        if type[1:] =='skew' or type == 'surf':
+            # Reshape to 3D
+            X = X.reshape(X.shape[0], TSTEPS, X.shape[1]//TSTEPS)
+        X = fe.har_transform(X, TSTEPS=TSTEPS, type=type)
+    return X
+
 
 def plotme(valY, Ydates, out):
     print(valY.shape, out.shape)
@@ -311,6 +366,208 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         if not plot:
             out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
+    elif (model == 'mskautoencoder' or model == 'mskpca' or model == 'mskhar' 
+         or model == 'mskvae' or model == 'mskenethar' or model == 'msklassohar' 
+         or model == 'mskenetpca' or model == 'msklassopca' or model == 'mskenetvae' or model == 'msklassovae'):
+        # XXX: The output vector
+        out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
+        out = out.reshape(*valY.shape)
+        mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+        # XXX: Now go through the TS
+        tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
+                                          pred.TSTEP)]
+        import pickle
+        model_name = model[3:]
+
+        # XXX: Special case for har due to switching to 20 tstep from 21
+        load_tsteps = TSTEPS
+        if model_name[-3:] == 'har':
+            load_tsteps = 21
+
+        for j, t in enumerate(tts):
+            if dd == './figs':
+                with open('./mskew_feature_models/%s_ts_%s_%s_%s.pkl' %
+                          (model_name, load_tsteps, t, otype), 'rb') as f:
+                    m1 = pickle.load(f)
+            else:
+                with open('./mskew_feature_models/%s_ts_%s_%s_%s_gfigs.pkl' %
+                          (model_name, load_tsteps, t, otype), 'rb') as f:
+                    m1 = pickle.load(f)
+                    
+            mskew = valX[:, :, :, j]
+            mskew = mskew.reshape(mskew.shape[0], mskew.shape[1]*mskew.shape[2])
+
+            # Extract features before prediction
+            mskew = extract_features(mskew, model_name, dd, TSTEPS, feature_res, m=t, type='mskew', otype=otype)
+
+            # XXX: Add t to the sample set
+            ts = np.array([t]*mskew.shape[0]).reshape(mskew.shape[0], 1)
+            mskew = np.append(mskew, ts, axis=1)
+
+            out[:, :, j] = m1.predict(mskew)
+
+            if get_features and model != 'mskvae':
+                if j in TERM:
+                    X = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+                    labels = ['t-%s' % (i+1) for i in range(feature_res)[::-1]]
+                    markers = [(3+i, 1, 0) for i in range(feature_res)]
+                    for mts in MONEYNESS:
+                        # XXX: The term structure weights
+                        ws = m1.coef_[mts][:-1].reshape(feature_res, MS)
+                        # XXX: The term structure weight
+                        wms = m1.coef_[mts][-1]
+                        # XXX: Make sure that the term structure weight=nil
+                        assert (abs(wms) < 1e-4)
+                        # XXX: Now just plot the 2d curves
+                        fig, ax = plt.subplots()
+                        for i in range(feature_res):
+                            ax.plot(X, ws[i], marker=markers[i],
+                                    label=labels[i], markevery=0.1)
+                        ax.set_ylabel('Coefficient magnitudes')
+                        ax.set_xlabel('Moneyness')
+                        ax.legend(ncol=3)
+                        dfname = dd.split('/')[1]
+                        fname = './plots/%s_m_%s_t_%s_lags_%s_%s_%s.pdf' % (
+                            model, X[mts], t, TSTEPS, otype, dfname)
+                        plt.savefig(fname, bbox_inches='tight')
+                        plt.close(fig)
+        if not plot:
+            out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
+            valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
+
+
+
+    elif (model == 'tskautoencoder' or model == 'tskpca' or model == 'tskhar' or model == 'tskvae' 
+         or model == 'tskenethar' or model == 'tsklassohar' or model == 'tskenetpca' or model == 'tsklassopca' 
+         or model == 'tskenetvae' or model == 'tsklassovae'):
+        # XXX: The output vector
+        out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
+        out = out.reshape(*valY.shape)
+        mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+        # XXX: Go through the MS
+        import pickle
+        model_name = model[3:]
+
+        # XXX: Special case for har due to switching to 20 tstep from 21
+        load_tsteps = TSTEPS
+        if model_name[-3:] == 'har':
+            load_tsteps = 21
+
+        for j, m in enumerate(mms):
+            if dd == './figs':
+                with open('./tskew_feature_models/%s_ts_%s_%s_%s.pkl' %
+                          (model_name, load_tsteps, m, otype), 'rb') as f:
+                    m1 = pickle.load(f)
+            else:
+                with open('./tskew_feature_models/%s_ts_%s_%s_%s_gfigs.pkl' %
+                          (model_name, load_tsteps, m, otype), 'rb') as f:
+                    m1 = pickle.load(f)
+            tskew = valX[:, :, j]
+            tskew = tskew.reshape(tskew.shape[0], tskew.shape[1]*tskew.shape[2])
+
+            # Extract features before prediction
+            tskew = extract_features(tskew, model_name, dd, TSTEPS, feature_res, m=m, type='tskew', otype=otype)
+
+            # XXX: Add m to the sample set
+            ms = np.array([m]*tskew.shape[0]).reshape(tskew.shape[0], 1)
+            tskew = np.append(tskew, ms, axis=1)
+
+            # XXX: Predict the output
+            out[:, j] = m1.predict(tskew)
+
+            # XXX: Features plot
+            if get_features and model != 'tskvae':
+                if j in MONEYNESS:
+                    X = [i/pred.DAYS
+                         for i in range(pred.LT, pred.UT+pred.TSTEP,
+                                        pred.TSTEP)]
+                    labels = ['t-%s' % (i+1) for i in range(feature_res)[::-1]]
+                    markers = [(3+i, 1, 0) for i in range(feature_res)]
+                    for mts in TERM:
+                        # XXX: The term structure weights
+                        ws = m1.coef_[mts][:-1].reshape(feature_res, TS)
+                        # XXX: The moneyness weight
+                        wms = m1.coef_[mts][-1]
+                        # XXX: Make sure that the moneyness weight is nothing
+                        assert (abs(wms) < 1e-4)
+                        # XXX: Now just plot the 2d curves
+                        fig, ax = plt.subplots()
+                        for i in range(feature_res):
+                            ax.plot(X, ws[i], marker=markers[i],
+                                    label=labels[i], markevery=0.1)
+                        ax.set_ylabel('Coefficient magnitudes')
+                        ax.set_xlabel('Term structure')
+                        ax.legend(ncol=3)
+                        dfname = dd.split('/')[1]
+                        fname = './plots/%s_m_%s_t_%s_lags_%s_%s_%s.pdf' % (
+                            model, m, X[mts], TSTEPS, otype, dfname)
+                        plt.savefig(fname, bbox_inches='tight')
+                        plt.close(fig)
+
+        if not plot:
+            out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
+            valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
+
+    elif (model == 'pmautoencoder' or model == 'pmhar' or model == 'pmpca' or model == 'pmvae' 
+         or model == 'pmenethar' or model == 'pmlassohar' or model == 'pmenetpca' or model == 'pmlassopca' 
+         or model == 'pmenetvae' or model == 'pmlassovae'):
+        # XXX: The output vector
+        out = np.array([0.0]*(valY.shape[0]*valY.shape[1]*valY.shape[2]))
+        out = out.reshape(*valY.shape)
+        # XXX: Now go through the MS and TS
+        mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+        tts = [i/pred.DAYS
+               for i in range(pred.LT, pred.UT+pred.TSTEP, pred.TSTEP)]
+        import pickle
+        model_name = model[2:]
+
+        # XXX: Special case for har due to switching to 20 tstep from 21
+        load_tsteps = TSTEPS
+        if model_name[-3:] == 'har':
+            load_tsteps = 21
+
+        for i, s in enumerate(mms):
+            for j, t in enumerate(tts):
+                if dd == './figs':
+                    with open('./point_feature_models/%s_ts_%s_%s_%s_%s.pkl' %
+                              (model_name, load_tsteps, s, t, otype), 'rb') as f:
+                        m1 = pickle.load(f)
+                else:
+                    with open('./point_feature_models/%s_ts_%s_%s_%s_%s_gfigs.pkl' %
+                              (model_name, load_tsteps, s, t, otype), 'rb') as f:
+                        m1 = pickle.load(f)
+
+                # XXX: Now make the prediction
+                val_vec = valX[:, :, i, j]
+
+                # XXX: Extract features before prediction
+                val_vec = extract_features(val_vec, model_name, dd, TSTEPS, feature_res, m=s, t=t, type='point', otype=otype)
+
+                # XXX: Add t to the sample set
+                k = np.array([s, t]*val_vec.shape[0]).reshape(val_vec.shape[0], 2)
+                val_vec = np.append(val_vec, k, axis=1)
+
+                out[:, i, j] = m1.predict(val_vec)
+
+                # XXX: Feature vector plot
+                if get_features and model != 'pmvae':
+                    if i in MONEYNESS and j in TERM:
+                        fig, ax = plt.subplots()
+                        xaxis = ['t-%s' % (i+1) for i in (range(feature_res))[::-1]]
+                        # if model == 'pmhar':
+                        xaxis.append(r'$\mu$')
+                        xaxis.append(r'$\tau$')
+                        ax.bar(xaxis, m1.coef_, color='b')
+                        ax.set_ylabel('Coefficient magnitudes')
+                        plt.xticks(fontsize=9, rotation=45)
+                        dfname = dd.split('/')[1]
+                        fname = './plots/%s_m_%s_t_%s_lags_%s_%s_%s.pdf' % (
+                            model, s, t, TSTEPS, otype, dfname)
+                        plt.savefig(fname, bbox_inches='tight')
+                        plt.close(fig)
+        if not plot:
+            out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
+            valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
 
     elif (model == 'mskenet' or model == 'mskridge' or model == 'msklasso' or
           model == 'mskplsridge' or model == 'mskplslasso' or
@@ -372,6 +629,60 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         if not plot:
             out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
+
+    elif (model == 'vae' or model == 'pca' or model == 'har' or model == 'enethar' 
+          or model == 'lassohar' or model == 'enetpca' or model == 'lassopca' 
+          or model == 'enetvae' or model == 'lassovae'):
+        import pickle
+        valX = valX.reshape(valX.shape[0],
+                            valX.shape[1]*valX.shape[2]*valX.shape[3])
+        if not plot:
+            valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
+
+        # XXX: Special case for har due to switching to 20 tstep from 21
+        load_tsteps = TSTEPS
+        if model[-3:] == 'har':
+            load_tsteps = 21
+
+        # XXX: Load the model and then carry it out
+        if dd == './gfigs':
+            toopen = r"./surf_feature_models/%s_ts_%s_%s_gfigs.pkl" % (
+                model.lower(), load_tsteps, otype)
+        else:
+            toopen = r"./surf_feature_models/%s_ts_%s_%s.pkl" % (
+                model.lower(), load_tsteps, otype)
+        
+
+        # print('Doing model: ', toopen)
+        with open(toopen, "rb") as input_file:
+            m1 = pickle.load(input_file)
+
+        # XXX: Get the feature importances
+        if get_features and model == 'vaesurf':
+            ws = m1.coef_.reshape(MS, TS, TSTEPS, MS, TS)
+            # XXX: Just get the top 10 results
+            X = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+            Y = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
+                                            pred.TSTEP)]
+            for i in MONEYNESS:
+                for j in TERM:
+                    wsurf = ws[i][j]  # 1 IV point
+                    if dd == './figs':
+                        name = './plots/%s_m_%s_t_%s_%s_%s.pdf' % (
+                            model, X[i], Y[j], TSTEPS, otype)
+                    else:
+                        name = './plots/%s_m_%s_t_%s_%s_%s_gfigs.pdf' % (
+                            model, X[i], Y[j], TSTEPS, otype)
+                    plot_hmap_features(wsurf, X, Y, name)
+
+        # Extract features before prediction
+        valX = extract_features(valX, model, dd, TSTEPS, feature_res, type='surf', otype=otype)
+
+        # XXX: Predict the output
+        out = m1.predict(valX)
+        if plot:
+            # XXX: Reshape the data for plotting
+            out = out.reshape(out.shape[0], MS, TS)
 
     else:
         import pickle
@@ -573,10 +884,10 @@ def overall(fname):
 
 
 def model_v_model(otype):
-    TTS = [5, 20, 10]
+    TTS = [20]
     models = [
-        r'ctridge', r'ctlasso', r'ctenet',
-        r'ssviridge', r'ssvilasso', r'ssvienet',
+        # r'ctridge', r'ctlasso', r'ctenet',
+        # r'ssviridge', r'ssvilasso', r'ssvienet',
 
         # 'msknsridge', 'mskenet', 'msknslasso', 'msknsenet',
         # 'tsknsridge', 'tsknslasso', 'tsknsenet',
@@ -588,6 +899,10 @@ def model_v_model(otype):
         # 'mskridge', 'tskridge',
         # 'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
         # 'tskplsenet'
+        'har', 'lassohar', 'enethar',
+        'pmhar', 'pmlassohar', 'pmenethar',
+        'tskhar', 'tsklassohar', 'tskenethar',
+        'mskhar', 'msklassohar', 'mskenethar'
     ]
     fp = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
                                                              len(models))
@@ -612,7 +927,7 @@ def model_v_model(otype):
 
 def call_dmtest(otype, mmodel, models):
     TTS = [10, 20, 5]
-    # models = ['ssviridge', 'lasso', 'enet', 'plsridge', 'plslasso',
+    #models = ['ssviridge', 'lasso', 'enet', 'plsridge', 'plslasso',
     # 'plsenet',
     #           'pmlasso', 'pmenet', 'pmplsridge', 'pmplslasso',
     #           'pmplsenet', 'msklasso', 'mskenet', 'mskplsridge',
@@ -644,6 +959,12 @@ def call_dmtest(otype, mmodel, models):
                      for i in ['figs', 'gfigs']}
             # fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, sharex=True)
             for i in range(len(models)-1):
+
+                # XXX: modification for HAR
+                # Only do har for tstep 20
+                if models[i][-3:] == 'har' and ts != 20:
+                    continue
+
                 name1 = ('./final_results/%s_%s_ts_%s_model_%s.npy.gz' %
                          (otype, dd, ts, models[i]))
                 print('Doing %d: %s' % (i, name1))
@@ -653,6 +974,11 @@ def call_dmtest(otype, mmodel, models):
                 else:
                     y, yp = cache[dd][ts][models[i]]
                 for j in range(i+1, len(models)):
+
+                    # XXX: Modifications for HAR
+                    if models[j][-3:] == 'har' and ts != 20:
+                        continue
+
                     # XXX: Do only the best ones
                     name2 = ('./final_results/%s_%s_ts_%s_model_%s.npy.gz' %
                              (otype, dd, ts, models[j]))
@@ -1073,46 +1399,46 @@ if __name__ == '__main__':
     plt.style.use('seaborn-v0_8-whitegrid')
 
     # XXX: model vs model
-    # for otype in ['call', 'put']:
-    #     model_v_model(otype)
+    #for otype in ['call', 'put']:
+    #    model_v_model(otype)
 
     # XXX: Point ridge models -- Peter add other models here
-    point_ridge = {'point_ridge': ['pmridge', 'pmplsridge']}
-    point_lasso = {'point_lasso': ['pmlasso', 'pmplslasso']}
-    point_enet = {'point_enet': ['pmenet', 'pmplsenet']}
+    # point_ridge = {'point_ridge': ['pmridge','pmpca', 'pmplsridge', 'pmhar', 'pmvae']}
+    # point_lasso = {'point_lasso': ['pmlasso','pmlassopca', 'pmplslasso', 'pmlassohar', 'pmlassovae']}
+    # point_enet = {'point_enet': ['pmenet', 'pmenetpca', 'pmplsenet', 'pmenethar', 'pmenetvae']}
 
-    # XXX: Skew models -- Peter add other models here
-    skew_ridge = {'skew_ridge': ['mskridge', 'mskplsridge', 'msknsridge']}
-    skew_lasso = {'skew_lasso': ['msklasso', 'mskplslasso', 'msknslasso']}
-    skew_enet = {'skew_enet': ['mskenet', 'mskplsenet', 'msknsenet']}
+    # # XXX: Skew models -- Peter add other models here
+    # skew_ridge = {'skew_ridge': ['mskridge','mskpca', 'mskplsridge', 'msknsridge', 'mskhar', 'mskvae']}
+    # skew_lasso = {'skew_lasso': ['msklasso','msklassopca', 'mskplslasso', 'msknslasso', 'msklassohar', 'msklassovae']}
+    # skew_enet = {'skew_enet': ['mskenet', 'mskenetpca', 'mskplsenet', 'msknsenet', 'mskenethar', 'mskenetvae']}
 
-    # XXX: Term structure models -- Peter add other models here
-    ts_ridge = {'termstructure_ridge':
-                ['tskridge', 'tskplsridge', 'tsknsridge']}
-    ts_lasso = {'termstructure_lasso':
-                ['tsklasso', 'tskplslasso', 'tsknslasso']}
-    ts_enet = {'termstructure_enet':
-               ['tskenet', 'tskplsenet', 'tsknsenet']}
+    # # XXX: Term structure models -- Peter add other models here
+    # ts_ridge = {'termstructure_ridge':
+    #             ['tskridge', 'tskpca', 'tskplsridge', 'tsknsridge', 'tskhar', 'tskvae']}
+    # ts_lasso = {'termstructure_lasso':
+    #             ['tsklasso', 'tsklassopca', 'tskplslasso', 'tsknslasso', 'tsklassohar', 'tsklassovae']}
+    # ts_enet = {'termstructure_enet':
+    #            ['tskenet', 'tskenetpca', 'tskplsenet', 'tsknsenet', 'tskenethar', 'tskenetvae']}
 
-    # XXX: Surface models -- Peter add other models here
-    surf_ridge = {'surf_ridge': ['ridge', 'plsridge', 'ctridge', 'ssviridge']}
-    surf_lasso = {'surf_lasso': ['lasso', 'plslasso', 'ctlasso', 'ssvilasso']}
-    surf_enet = {'surf_enet': ['enet', 'plsenet', 'ctenet', 'ssvienet']}
+    # # XXX: Surface models -- Peter add other models here
+    # surf_ridge = {'surf_ridge': ['ridge', 'pca', 'plsridge', 'ctridge', 'ssviridge', 'har', 'vae']}
+    # surf_lasso = {'surf_lasso': ['lasso', 'lassopca', 'plslasso', 'ctlasso', 'ssvilasso', 'lassohar', 'lassovae']}
+    # surf_enet = {'surf_enet': ['enet', 'enetpca', 'plsenet', 'ctenet', 'ssvienet', 'enethar', 'enetvae']}
+
+    # # for otype in ['call', 'put']:
+    #      # XXX: Plot the bar graph for overall results
+    # #     call_overall(otype)
+    #      # XXX: Plot the best time series RMSE and MAPE
+    # #     call_timeseries(otype)
 
     # for otype in ['call', 'put']:
-    #     # XXX: Plot the bar graph for overall results
-    #     call_overall(otype)
-    #     # XXX: Plot the best time series RMSE and MAPE
-    #     call_timeseries(otype)
-
-    for otype in ['call', 'put']:
-        for i in [surf_ridge, point_ridge, point_lasso, point_enet,
-                  skew_ridge, skew_lasso, skew_enet,
-                  ts_ridge, ts_lasso, ts_enet,
-                  surf_lasso, surf_enet]:
-            # XXX: DM test across time (RMSE)
-            model, models = list(i.keys())[0], list(i.values())[0]
-            call_dmtest(otype, model, models)
+    #     for i in [surf_ridge, point_ridge, point_lasso, point_enet,
+    #               skew_ridge, skew_lasso, skew_enet,
+    #               ts_ridge, ts_lasso, ts_enet,
+    #               surf_lasso, surf_enet]:
+    #        # XXX: DM test across time (RMSE)
+    #         model, models = list(i.keys())[0], list(i.values())[0]
+    #         call_dmtest(otype, model, models)
 
     # XXX: r2_score for moneyness and term structure
     # for otype in ['call', 'put']:
@@ -1125,6 +1451,62 @@ if __name__ == '__main__':
     # usually there is literally no difference.
     # for otype in ['call', 'put']:
     #     lag_test(otype)
+
+    # XXX: Generate latex table for dmtest rmse
+    for otype in ['call']:
+        for ts in [5, 10, 20]:
+            for dd in ['figs']:
+                for feature in ['surf', 'point', 'skew', 'termstructure']:
+                    for mmodel in ['ridge', 'lasso', 'enet']:
+                        df = pd.read_csv('./plots/dstat_%s_%s_%s_%s_%s_rmse.csv' % (
+                            otype, ts, dd, feature, mmodel))
+                        
+                        # rename the column headers
+                        columns = ['SAM', '\\ac{PCA}', '\\ac{CCA}', '\\ac{NS}', '\\ac{ADNS}', '\\ac{SSVI}', '\\ac{HAR}', '\\ac{VAE}']
+                        index = ['SAM', '\\ac{PCA}', '\\ac{CCA}', '\\ac{NS}', '\\ac{ADNS}', '\\ac{SSVI}', '\\ac{HAR}', '\\ac{VAE}']
+
+                        if feature == 'surf':
+                            columns.remove('\\ac{NS}')
+                            index.remove('\\ac{NS}')
+                        elif feature == 'point':
+                            columns.remove('\\ac{SSVI}')
+                            columns.remove('\\ac{ADNS}')
+                            columns.remove('\\ac{NS}')
+                            index.remove('\\ac{SSVI}')
+                            index.remove('\\ac{ADNS}')
+                            index.remove('\\ac{NS}')
+                        else:
+                            columns.remove('\\ac{SSVI}')
+                            columns.remove('\\ac{ADNS}')
+                            index.remove('\\ac{SSVI}')
+                            index.remove('\\ac{ADNS}')
+
+
+                        df.columns = columns
+                        df.index = index
+
+                        # Remove the vae index
+                        df = df.drop('\\ac{VAE}', axis=0)
+                        # remove the har index if ts != 20
+                        if ts != 20:
+                            df = df.drop('\\ac{HAR}', axis=0)
+                        # set all 0.0 float values to nan
+                        df = df.replace(0.0, np.nan)
+                        
+                        s = df.style.highlight_max(props='textbf:--rwrap;')
+
+                        s.format('{:.1f}', na_rep="-")
+
+                        s.to_latex(buf='../feature_paper/figs/dstat/dstat_%s_%s_%s_%s_%s_rmse.tex' % (
+                            otype, ts, dd, feature, mmodel), column_format='l'*df.columns.size, hrules=True) 
+
+                        # df.to_latex(buf='./plots/%s_%s_%s_%s_rmse.tex' % (
+                        #     otype, ts, dd, mmodel), header=True)
+
+
+
+
+
 
     # XXX: The statistics for the complete dataset
     # cdfm = list()
