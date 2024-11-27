@@ -18,6 +18,7 @@ from pred import NS
 from pred import CT
 from pred import SSVI
 from scipy import stats
+from blackscholes import BlackScholesCall
 
 
 def date_to_num(otype, date, dd='./figs'):
@@ -767,6 +768,26 @@ def save_results(otype, models, fp, cache):
                 #     np.save(file=f, arr=res)
 
 
+def getpreds_trading(name1, otype):
+    mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+    # XXX: Now go through the TS
+    tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
+                                      pred.TSTEP)]
+    MS = len(mms)
+    TS = len(tts)
+
+    data1 = blosc2.load_array(name1)
+    # XXX: These are the dates
+    dates = data1[:, 0].astype(np.datetime64, copy=False)
+
+    y = data1[:, 1:MS*TS+1].astype(float, copy=False)
+    yp = data1[:, MS*TS+1:].astype(float, copy=False)
+
+    # XXX: Across time
+    return (dates, y.reshape(dates.shape[0], MS, TS),
+            yp.reshape(dates.shape[0], MS, TS))
+
+
 def getpreds(name1):
     mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
     # XXX: Now go through the TS
@@ -776,6 +797,8 @@ def getpreds(name1):
     TS = len(tts)
 
     data1 = blosc2.load_array(name1)
+    # XXX: These are the dates
+    # dates = data1[:, 0].astype(np.datetime64, copy=False)
     # with gzip.open(filename=name1, mode='rb') as f:
     #     data1 = np.load(f)
 
@@ -1395,6 +1418,211 @@ def lag_test(otype):
             print(model, r' R^2: ', r2f, r2pf)
 
 
+def trade(dates, y, yp, otype, strat, TC=1/100, eps=0.05, lags=5):
+    """transaction cost is 10% of the call and underlying price.
+
+    """
+
+    def c_position(sign, CP, UP, delta):
+        tc = (CP * TC) + (UP * delta) * TC
+        if sign > 0:
+            return (CP - (UP * delta)) - tc
+        else:
+            return (-CP + (UP * delta)) - tc
+
+    def o_position(sign, CP, UP, delta):
+        tc = (CP * TC) + (UP * delta) * TC
+        if sign > 0:
+            return (-CP + (UP * delta)) - tc
+        else:
+            return (CP - (UP * delta)) - tc
+
+    mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+    # XXX: Now go through the TS
+    tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
+                                      pred.TSTEP)]
+    # XXX: First read all the real prices from database for the test
+    # dates
+    data = dict()
+    for d in dates:
+        df = pd.read_csv('./interest_rates/%s.csv' % str(d))
+        df = df[df['Type'] == otype].reset_index()
+        df = df[['IV', 'm', 'tau', 'Mid', 'Delta', 'UnderlyingPrice', 'Strike',
+                 'InterestR']]
+        data[d] = df
+
+    cash = 100000               # starting cash position 100K
+    ip = list()                 # list of traded indices (moneyness)
+    jp = list()                 # list of traded indices (term structure)
+    mp = list()                 # list of traded moneyness
+    tp = list()                 # list of traded term structure
+    dl = list()                 # list of traded deltas
+    Kp = list()
+    Sp = list()
+    Rp = list()
+    Cp = list()
+    signl = list()              # list of traded volatility
+    cashl = list()              # list of cash positions
+    trade_date = list()   # list of trade dates
+    open_position = False       # do we have a current open position?
+
+    # XXX: Attach the underlying price
+    mDates = list()
+    marketPrice = list()
+
+    # XXX: Actual trade
+    for t in range(0, dates.shape[0]-1):
+        open_p = False
+        # XXX: Get all the points from the real dataset
+        tdata = data[dates[t]]
+        # XXX: These are the changes
+        dhat = yp[t+1] - y[t]
+        ddhat = np.abs(dhat)
+        R = np.mean(np.abs(tdata['InterestR'].values))
+        R = Rp[-1] if np.isnan(R) else R
+        UP = tdata['UnderlyingPrice'].values[0]
+        mDates.append(dates[t])
+        marketPrice.append(UP)
+        # XXX: Now get the highest dhat point
+        i, j = np.unravel_index(np.argmax(ddhat, axis=None), ddhat.shape)
+
+        # XXX: Only if the change is greater than some filter (eps) --
+        # trade.
+        if ddhat[i, j]/y[t][i, j] >= eps:
+            m = mms[i]
+            tau = tts[j]
+            S = UP
+            K = m*S
+            ecall = BlackScholesCall(S=S, K=K, T=tau, r=R,
+                                     sigma=y[t][i, j])
+            Delta = ecall.delta()
+            CP = ecall.price()
+            open_p = True       # open a position later
+
+        if open_position:   # is position already open?
+            if i == ip[-1] and j == jp[-1]:
+                open_p = False  # just hold
+            # XXX: Remove this line if you want to close it everyday
+            if (not open_p) or (open_p and (i != ip[-1] and j != jp[-1])):
+                UPo = mp[-1]*UP
+                ecall = BlackScholesCall(S=UP, K=UPo, T=tp[-1],
+                                         r=R, sigma=y[t][i, j])
+                CPo = ecall.price()
+                cash += c_position(signl[-1], CPo, UPo, dl[-1])
+                # XXX: Only append if we are not going to open a new
+                # position immediately
+                if not open_p:
+                    cashl.append(cash)
+                    trade_date.append(dates[t])
+                open_position = False
+
+        # if open_p and (not open_position):
+        # XXX: You can open multiple (same or different) positions at
+        # once.
+        if open_p:
+            ccash = o_position(dhat[i, j], CP, S, Delta)
+            if cash + ccash >= 0:
+                open_position = True  # for closing the position later
+                # XXX: Make the cash updates
+                mp.append(m)
+                tp.append(tau)
+                dl.append(Delta)
+                signl.append(dhat[i, j])
+                ip.append(i)
+                jp.append(j)
+                Sp.append(S)
+                Kp.append(K)
+                Rp.append(R)
+                Cp.append(CP)
+                cash += ccash
+                cashl.append(cash)
+                trade_date.append(dates[t])
+            open_p = False      # The position is now opened
+        else:
+            cashl.append(cash)
+            trade_date.append(dates[t])
+            open_p = False      # Kinda done!
+
+    import os
+    if not os.path.exists('./trades/marketPrice.csv'):
+        mdates = pd.to_datetime(mDates, format='%Y%m%d')
+        df = pd.DataFrame({'dates': mdates, 'Price': marketPrice})
+        df.to_csv('./trades/marketPrice.csv')
+
+    trade_date = pd.to_datetime(trade_date, format='%Y%m%d')
+    res = pd.DataFrame({'cash': cashl, 'dates': trade_date})
+    res = res.dropna()
+    res.to_csv('./trades/%s_%s_%s.csv' % (strat, otype, lags))
+
+    # plt.plot(trade_date, cashl[1:])
+    # plt.xlabel('Years')
+    # plt.ylabel('$ cash position')
+    # plt.show()
+    # # plt.savefig('/tmp/trade.pdf', bbox_inches='tight')
+    # plt.close()
+
+
+def analyse_trades(otype, model, lags, resa, resb, rf=3.83/(100), Y=9):
+    import warnings
+    warnings.filterwarnings("ignore")
+    print('Model %s_%s_%s: ' % (model, otype, lags))
+    mrdf = pd.read_csv('./trades/marketPrice.csv')
+    prdf = pd.read_csv('./trades/%s_%s_%s.csv' % (model, otype, lags))
+
+    prdf['Date'] = pd.to_datetime(prdf['dates'], format='%Y-%m-%d')
+    mrdf['Date'] = pd.to_datetime(mrdf['dates'], format='%Y-%m-%d')
+    prdf['pct_chg'] = prdf.groupby(prdf.Date.dt.year)['cash'].pct_change()
+    mrdf['pct_chg'] = mrdf.groupby(mrdf.Date.dt.year)['Price'].pct_change()
+
+    # XXX: Expected portfolio return
+    rp = prdf.groupby(prdf.Date.dt.year)['pct_chg'].sum()
+    # rp = prdf['cash'].pct_change().dropna()
+    # rp = np.log(prdf['cash']).diff().dropna()
+    # XXX: Expected market return
+    rm = mrdf.groupby(mrdf.Date.dt.year)['pct_chg'].sum()
+    # rm = mrdf['Price'].pct_change().dropna()
+    # rm = np.log(mrdf['Price']).diff().dropna()
+    print(rp)
+    trp = pd.DataFrame({'Years': rp.index, '% Return': rp.values*100})
+    trp.plot.bar(x='Years', y='% Return')
+    plt.savefig('./trades/%s_%s_%s.pdf' % (model, otype, lags),
+                bbox_inches='tight')
+    plt.close()
+
+    gn = (np.log((1+rm).mean()) - np.log(1+rf))
+    gd = np.log((1+rm)).replace([np.inf, -np.inf], np.nan).dropna().var()
+    # print('gn: ', gn)
+    # print('gd: ', gd)
+    gamma = gn/gd
+    # print('gamma: ', gamma)
+
+    drprm = pd.DataFrame({'rm': rm, 'rp': rp})
+    drprm['rr'] = -(1+rm)**(-gamma)
+    drprm = drprm.replace([np.inf, -np.inf], np.nan).dropna()
+    # print(drprm.describe())
+
+    bn = np.cov(drprm['rp'], drprm['rr'])[0, 1]
+    bd = np.cov(drprm['rm'], drprm['rr'])[0, 1]
+
+    beta = bn/bd
+    print('beta: ', beta)
+
+    if prdf['cash'].values[-1] >= 0:
+        cagr_rp = (prdf['cash'].values[-1]/prdf['cash'].values[0])**(1/9) - 1
+    else:
+        cagr_rp = -np.inf       # infinitely worse!
+    cagr_mp = (mrdf['Price'].values[-1]/mrdf['Price'].values[0])**(1/9) - 1
+    print('CAGR Portfolio, CAGR Market: ', cagr_rp, cagr_mp)
+
+    if cagr_rp >= 0:
+        alpha = cagr_rp - beta*(cagr_mp - rf).mean() - rf
+    else:
+        alpha = -np.inf
+    print('alpha: %s, beta: %s ' % (alpha, beta))
+    resa[model] = alpha
+    resb[model] = beta
+
+
 if __name__ == '__main__':
     plt.style.use('seaborn-v0_8-whitegrid')
 
@@ -1430,6 +1658,12 @@ if __name__ == '__main__':
     # #     call_overall(otype)
     #      # XXX: Plot the best time series RMSE and MAPE
     # #     call_timeseries(otype)
+
+    # for otype in ['call', 'put']:
+    #     # XXX: Plot the bar graph for overall results
+    #     call_overall(otype)
+    #     # XXX: Plot the best time series RMSE and MAPE
+    #     call_timeseries(otype)
 
     # for otype in ['call', 'put']:
     #     for i in [surf_ridge, point_ridge, point_lasso, point_enet,
@@ -1481,7 +1715,6 @@ if __name__ == '__main__':
                             index.remove('\\ac{SSVI}')
                             index.remove('\\ac{ADNS}')
 
-
                         df.columns = columns
                         df.index = index
 
@@ -1492,21 +1725,46 @@ if __name__ == '__main__':
                             df = df.drop('\\ac{HAR}', axis=0)
                         # set all 0.0 float values to nan
                         df = df.replace(0.0, np.nan)
-                        
                         s = df.style.highlight_max(props='textbf:--rwrap;')
 
                         s.format('{:.1f}', na_rep="-")
 
                         s.to_latex(buf='../feature_paper/figs/dstat/dstat_%s_%s_%s_%s_%s_rmse.tex' % (
-                            otype, ts, dd, feature, mmodel), column_format='l'*df.columns.size, hrules=True) 
+                            otype, ts, dd, feature, mmodel), column_format='l'*df.columns.size, hrules=True)
 
                         # df.to_latex(buf='./plots/%s_%s_%s_%s_rmse.tex' % (
                         #     otype, ts, dd, mmodel), header=True)
 
+    # XXX: The trading part, only for the best model
+    models = ['ridge', 'ssviridge', 'plsridge', 'ctridge',
+              'tskridge', 'tskplsridge', 'tsknsridge',
+              'mskridge', 'msknsridge', 'mskplsridge',
+              'pmridge', 'pmplsridge']
+    for otype in ['put', 'call']:
+        # XXX: Change or add to the loops as needed
+        for dd in ['figs']:
+            for ts in [5]:
+                # XXX: tskridge leads to loss after 2019, why?
+                # XXX: I think it is overflowing, most likely!
+                # XXX: ssviridge performs the best!!
+                for model in models:
+                    name = ('./final_results/%s_%s_ts_%s_model_%s.npy.gz' %
+                            (otype, dd, ts, model))
+                    dates, y, yp = getpreds_trading(name, otype)
+                    trade(dates, y, yp, otype, model)
 
-
-
-
+    resa = dict()
+    resb = dict()
+    for otype in ['call', 'put']:
+        # XXX: Change or add to the loops as needed
+        for dd in ['figs']:
+            for ts in [5]:
+                for model in ['tskridge']:
+                    analyse_trades(otype, model, ts, resa, resb)
+        df = pd.DataFrame(resa, index=[0])
+        df.to_csv('./trades/alpha_%s.csv' % otype)
+        df = pd.DataFrame(resb, index=[0])
+        df.to_csv('./trades/beta_%s.csv' % otype)
 
     # XXX: The statistics for the complete dataset
     # cdfm = list()
