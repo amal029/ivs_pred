@@ -1291,7 +1291,7 @@ def r2_rmse_score_mt(otype, models=['pmridge', 'tskridge']):
                     dm[tn][mi] = dstat
                     dmp[tn][mi] = pval
                     rm[tn][mi] = cr2_score(yr, ypr1, ypr2)*100
-                    rmp[tn][mi] = cr2_score_pval(yr, ypr1, ypr2)
+                    rmp[tn][mi] = cr2_score_pval(yr, ypr1, ypr2, greater=False)
 
             # XXX: Write the data frame to file
             # df1.to_csv('./plots/mt_r2_%s_%s_%s_%s.csv' % (model1, otype, ts,
