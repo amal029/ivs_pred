@@ -1448,7 +1448,26 @@ def trade(dates, y, yp, otype, strat, eps=0, lags=5):
         TC = (data['Ask'] - data['Bid'])*P/data['Ask']
         return np.mean(np.abs(TC))
 
+    def c_position_s(sign, CP, PP, TC):
+        """This is trading a straddle
+        """
+        tc = (CP * TC) + (PP * TC)
+        if sign > 0:
+            return (CP + PP) - tc
+        else:
+            return (-(CP + PP)) - tc
+
+    def o_position_s(sign, CP, PP, TC):
+        tc = CP * TC + PP * TC
+        if sign > 0:
+            return (-(CP + PP)) - tc
+        else:
+            return (CP + PP) - tc
+
     def c_position(sign, CP, UP, delta, TC):
+        """This is delta hedged
+        """
+
         tc = (CP * TC) + (UP * np.abs(delta)) * TC
         if sign > 0:
             return (CP - (UP * delta)) - tc
@@ -1524,6 +1543,13 @@ def trade(dates, y, yp, otype, strat, eps=0, lags=5):
             else:
                 ecall = BlackScholesPut(S=S, K=K, T=tau, r=R,
                                         sigma=y[t][i, j])
+            if otype == 'put':
+                PP = BlackScholesCall(S=S, K=K, T=tau, r=R,
+                                      sigma=y[t][i, j]).price()
+            else:
+                PP = BlackScholesPut(S=S, K=K, T=tau, r=R,
+                                     sigma=y[t][i, j]).price()
+
             Delta = ecall.delta()
             CP = ecall.price()
             open_p = True       # open a position later
@@ -1541,10 +1567,19 @@ def trade(dates, y, yp, otype, strat, eps=0, lags=5):
                     ecall = BlackScholesPut(S=UP, K=UPo, T=tp[-1],
                                             r=R, sigma=y[t][i, j])
                 CPo = ecall.price()
+
+                if otype == 'call':
+                    UPo = BlackScholesPut(S=UP, K=UPo, T=tp[-1],
+                                          r=R, sigma=y[t][i, j]).price()
+                else:
+                    UPo = BlackScholesCall(S=UP, K=UPo, T=tp[-1],
+                                           r=R, sigma=y[t][i, j]).price()
+
                 # XXX: Get transaction costs for this day as % of
                 # bid-ask spread.
                 TC = getTC(tdata, 0.25)
-                cash += c_position(signl[-1], CPo, UPo, dl[-1], TC)
+                cash += c_position_s(signl[-1], CPo, UPo, TC)
+                # cash += c_position(signl[-1], CPo, UPo, dl[-1], TC)
                 # XXX: Only append if we are not going to open a new
                 # position immediately
                 if not open_p:
@@ -1557,7 +1592,8 @@ def trade(dates, y, yp, otype, strat, eps=0, lags=5):
         # once.
         if open_p:
             TC = getTC(tdata, 0.25)
-            ccash = o_position(dhat[i, j], CP, S, Delta, TC)
+            ccash = o_position_s(dhat[i, j], CP, PP, TC)
+            # ccash = o_position(dhat[i, j], CP, S, Delta, TC)
             if cash + ccash >= 0:
                 open_position = True  # for closing the position later
                 # XXX: Make the cash updates
