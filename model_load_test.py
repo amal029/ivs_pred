@@ -18,7 +18,7 @@ from pred import NS
 from pred import CT
 from pred import SSVI
 from scipy import stats
-from blackscholes import BlackScholesCall
+from blackscholes import BlackScholesCall, BlackScholesPut
 
 
 def date_to_num(otype, date, dd='./figs'):
@@ -445,7 +445,8 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
 
-    elif (model == 'tskautoencoder' or model == 'tskpca' or model == 'tskhar' or
+    elif (model == 'tskautoencoder' or model == 'tskpca' or
+          model == 'tskhar' or
           model == 'tskvae'
           or model == 'tskenethar' or
           model == 'tsklassohar' or model == 'tskenetpca' or
@@ -1441,20 +1442,21 @@ def lag_test(otype):
             print(model, r' R^2: ', r2f, r2pf)
 
 
-def trade(dates, y, yp, otype, strat, TC=1/100, eps=0.05, lags=5):
-    """transaction cost is 10% of the call and underlying price.
+def trade(dates, y, yp, otype, strat, eps=0, lags=5):
 
-    """
+    def getTC(data, P=0.25):
+        TC = (data['Ask'] - data['Bid'])*P/data['Ask']
+        return np.mean(np.abs(TC))
 
-    def c_position(sign, CP, UP, delta):
-        tc = (CP * TC) + (UP * delta) * TC
+    def c_position(sign, CP, UP, delta, TC):
+        tc = (CP * TC) + (UP * np.abs(delta)) * TC
         if sign > 0:
             return (CP - (UP * delta)) - tc
         else:
             return (-CP + (UP * delta)) - tc
 
-    def o_position(sign, CP, UP, delta):
-        tc = (CP * TC) + (UP * delta) * TC
+    def o_position(sign, CP, UP, delta, TC):
+        tc = (CP * TC) + (UP * np.abs(delta)) * TC
         if sign > 0:
             return (-CP + (UP * delta)) - tc
         else:
@@ -1471,7 +1473,7 @@ def trade(dates, y, yp, otype, strat, TC=1/100, eps=0.05, lags=5):
         df = pd.read_csv('./interest_rates/%s.csv' % str(d))
         df = df[df['Type'] == otype].reset_index()
         df = df[['IV', 'm', 'tau', 'Mid', 'Delta', 'UnderlyingPrice', 'Strike',
-                 'InterestR']]
+                 'InterestR', 'Ask', 'Bid', 'Last']]
         data[d] = df
 
     cash = 100000               # starting cash position 100K
@@ -1516,8 +1518,12 @@ def trade(dates, y, yp, otype, strat, TC=1/100, eps=0.05, lags=5):
             tau = tts[j]
             S = UP
             K = m*S
-            ecall = BlackScholesCall(S=S, K=K, T=tau, r=R,
-                                     sigma=y[t][i, j])
+            if otype == 'call':
+                ecall = BlackScholesCall(S=S, K=K, T=tau, r=R,
+                                         sigma=y[t][i, j])
+            else:
+                ecall = BlackScholesPut(S=S, K=K, T=tau, r=R,
+                                        sigma=y[t][i, j])
             Delta = ecall.delta()
             CP = ecall.price()
             open_p = True       # open a position later
@@ -1528,10 +1534,17 @@ def trade(dates, y, yp, otype, strat, TC=1/100, eps=0.05, lags=5):
             # XXX: Remove this line if you want to close it everyday
             if (not open_p) or (open_p and (i != ip[-1] and j != jp[-1])):
                 UPo = mp[-1]*UP
-                ecall = BlackScholesCall(S=UP, K=UPo, T=tp[-1],
-                                         r=R, sigma=y[t][i, j])
+                if otype == 'call':
+                    ecall = BlackScholesCall(S=UP, K=UPo, T=tp[-1],
+                                             r=R, sigma=y[t][i, j])
+                else:
+                    ecall = BlackScholesPut(S=UP, K=UPo, T=tp[-1],
+                                            r=R, sigma=y[t][i, j])
                 CPo = ecall.price()
-                cash += c_position(signl[-1], CPo, UPo, dl[-1])
+                # XXX: Get transaction costs for this day as % of
+                # bid-ask spread.
+                TC = getTC(tdata, 0.25)
+                cash += c_position(signl[-1], CPo, UPo, dl[-1], TC)
                 # XXX: Only append if we are not going to open a new
                 # position immediately
                 if not open_p:
@@ -1543,7 +1556,8 @@ def trade(dates, y, yp, otype, strat, TC=1/100, eps=0.05, lags=5):
         # XXX: You can open multiple (same or different) positions at
         # once.
         if open_p:
-            ccash = o_position(dhat[i, j], CP, S, Delta)
+            TC = getTC(tdata, 0.25)
+            ccash = o_position(dhat[i, j], CP, S, Delta, TC)
             if cash + ccash >= 0:
                 open_position = True  # for closing the position later
                 # XXX: Make the cash updates
@@ -1585,12 +1599,24 @@ def trade(dates, y, yp, otype, strat, TC=1/100, eps=0.05, lags=5):
     # plt.close()
 
 
-def analyse_trades(otype, model, lags, resa, resb, rf=3.83/(100), Y=9):
+def analyse_trades(otype, model, lags, alpha, betas,
+                   cagrs, wins, maxs, mins, avgs, medians,
+                   sds, srs, ns, rf=3.83/(100), Y=9):
     import warnings
     warnings.filterwarnings("ignore")
-    print('Model %s_%s_%s: ' % (model, otype, lags))
+    # print('Model %s_%s_%s: ' % (model, otype, lags))
     mrdf = pd.read_csv('./trades/marketPrice.csv')
     prdf = pd.read_csv('./trades/%s_%s_%s.csv' % (model, otype, lags))
+
+    # XXX: Plot the portfolio
+    prdf.plot.line(x='dates', y='cash', label='%s_%s' % (model, otype))
+    plt.xlabel('Years')
+    plt.ylabel('$ Portfolio P/L')
+    plt.xticks(rotation=45)
+    plt.legend()
+    plt.savefig('./trades/%s_%s_%s_portfolio.pdf' % (model, otype, lags),
+                bbox_inches='tight')
+    plt.close()
 
     prdf['Date'] = pd.to_datetime(prdf['dates'], format='%Y-%m-%d')
     mrdf['Date'] = pd.to_datetime(mrdf['dates'], format='%Y-%m-%d')
@@ -1605,7 +1631,7 @@ def analyse_trades(otype, model, lags, resa, resb, rf=3.83/(100), Y=9):
     rm = mrdf.groupby(mrdf.Date.dt.year)['pct_chg'].sum()
     # rm = mrdf['Price'].pct_change().dropna()
     # rm = np.log(mrdf['Price']).diff().dropna()
-    print(rp)
+    # print(rp)
     trp = pd.DataFrame({'Years': rp.index, '% Return': rp.values*100})
     trp.plot.bar(x='Years', y='% Return')
     plt.savefig('./trades/%s_%s_%s.pdf' % (model, otype, lags),
@@ -1628,22 +1654,46 @@ def analyse_trades(otype, model, lags, resa, resb, rf=3.83/(100), Y=9):
     bd = np.cov(drprm['rm'], drprm['rr'])[0, 1]
 
     beta = bn/bd
-    print('beta: ', beta)
+    # print('beta: ', beta)
 
     if prdf['cash'].values[-1] >= 0:
         cagr_rp = (prdf['cash'].values[-1]/prdf['cash'].values[0])**(1/9) - 1
     else:
         cagr_rp = -np.inf       # infinitely worse!
     cagr_mp = (mrdf['Price'].values[-1]/mrdf['Price'].values[0])**(1/9) - 1
-    print('CAGR Portfolio, CAGR Market: ', cagr_rp, cagr_mp)
+    # print('CAGR Portfolio (%), CAGR Market (%): ', cagr_rp*100, cagr_mp*100)
 
     if cagr_rp >= 0:
         alpha = cagr_rp - beta*(cagr_mp - rf).mean() - rf
     else:
         alpha = -np.inf
-    print('alpha: %s, beta: %s ' % (alpha, beta))
-    resa[model] = alpha
-    resb[model] = beta
+
+    # XXX: Statsitic data for trades
+    dprdf = prdf['cash'].pct_change().dropna()
+    # print('Number of trades: ', dprdf[dprdf != 0].shape[0])
+    # print('% Wins: ', dprdf[dprdf >= 0].shape[0]/dprdf.shape[0]*100)
+    # print('Mean % return: ', dprdf.mean()*100)
+    # print('Median % return: ', dprdf.median()*100)
+    # print('Max % return: ', dprdf.max()*100)
+    # print('Min % return: ', dprdf.min()*100)
+    # print('SD % return: ', dprdf.std()*100)
+    # # print('Trade description: ', dprdf.describe())
+    # print('Sharpe Ratio: ', (cagr_rp-rf)/dprdf.std())
+    # print('\n')
+
+    # XXX: Append to lists
+    dprdf = prdf['cash'].pct_change().dropna()
+    alphas.append(alpha)
+    betas.append(beta)
+    ns.append(dprdf[dprdf != 0].shape[0])
+    cagrs.append(cagr_rp*100)
+    maxs.append(dprdf.max()*100)
+    mins.append(dprdf.min()*100)
+    medians.append(dprdf.median()*100)
+    sds.append(dprdf.std()*100)
+    srs.append(((cagr_rp-rf)/dprdf.std()))
+    wins.append(dprdf[dprdf >= 0].shape[0]/dprdf.shape[0]*100)
+    avgs.append(dprdf.mean()*100)
 
 
 if __name__ == '__main__':
@@ -1722,60 +1772,61 @@ if __name__ == '__main__':
     #     lag_test(otype)
 
     # XXX: Generate latex table for dmtest rmse
-    for otype in ['call']:
-        for ts in [5, 10, 20]:
-            for dd in ['figs']:
-                for feature in ['surf', 'point', 'skew', 'termstructure']:
-                    for mmodel in ['ridge', 'lasso', 'enet']:
-                        df = pd.read_csv(
-                            './plots/dstat_%s_%s_%s_%s_%s_rmse.csv' % (
-                                otype, ts, dd, feature, mmodel))
+    # for otype in ['call']:
+    #     for ts in [5, 10, 20]:
+    #         for dd in ['figs']:
+    #             for feature in ['surf', 'point', 'skew', 'termstructure']:
+    #                 for mmodel in ['ridge', 'lasso', 'enet']:
+    #                     df = pd.read_csv(
+    #                         './plots/dstat_%s_%s_%s_%s_%s_rmse.csv' % (
+    #                             otype, ts, dd, feature, mmodel))
 
-                        # rename the column headers
-                        columns = ['SAM', '\\ac{PCA}',
-                                   '\\ac{CCA}', '\\ac{NS}', '\\ac{ADNS}',
-                                   '\\ac{SSVI}', '\\ac{HAR}', '\\ac{VAE}']
-                        index = ['SAM', '\\ac{PCA}', '\\ac{CCA}', '\\ac{NS}',
-                                 '\\ac{ADNS}', '\\ac{SSVI}', '\\ac{HAR}',
-                                 '\\ac{VAE}']
+    #                     # rename the column headers
+    #                     columns = ['SAM', '\\ac{PCA}',
+    #                                '\\ac{CCA}', '\\ac{NS}', '\\ac{ADNS}',
+    #                                '\\ac{SSVI}', '\\ac{HAR}', '\\ac{VAE}']
+    #                     index = ['SAM', '\\ac{PCA}', '\\ac{CCA}', '\\ac{NS}',
+    #                              '\\ac{ADNS}', '\\ac{SSVI}', '\\ac{HAR}',
+    #                              '\\ac{VAE}']
 
-                        if feature == 'surf':
-                            columns.remove('\\ac{NS}')
-                            index.remove('\\ac{NS}')
-                        elif feature == 'point':
-                            columns.remove('\\ac{SSVI}')
-                            columns.remove('\\ac{ADNS}')
-                            columns.remove('\\ac{NS}')
-                            index.remove('\\ac{SSVI}')
-                            index.remove('\\ac{ADNS}')
-                            index.remove('\\ac{NS}')
-                        else:
-                            columns.remove('\\ac{SSVI}')
-                            columns.remove('\\ac{ADNS}')
-                            index.remove('\\ac{SSVI}')
-                            index.remove('\\ac{ADNS}')
+    #                     if feature == 'surf':
+    #                         columns.remove('\\ac{NS}')
+    #                         index.remove('\\ac{NS}')
+    #                     elif feature == 'point':
+    #                         columns.remove('\\ac{SSVI}')
+    #                         columns.remove('\\ac{ADNS}')
+    #                         columns.remove('\\ac{NS}')
+    #                         index.remove('\\ac{SSVI}')
+    #                         index.remove('\\ac{ADNS}')
+    #                         index.remove('\\ac{NS}')
+    #                     else:
+    #                         columns.remove('\\ac{SSVI}')
+    #                         columns.remove('\\ac{ADNS}')
+    #                         index.remove('\\ac{SSVI}')
+    #                         index.remove('\\ac{ADNS}')
 
-                        df.columns = columns
-                        df.index = index
+    #                     df.columns = columns
+    #                     df.index = index
 
-                        # Remove the vae index
-                        df = df.drop('\\ac{VAE}', axis=0)
-                        # remove the har index if ts != 20
-                        if ts != 20:
-                            df = df.drop('\\ac{HAR}', axis=0)
-                        # set all 0.0 float values to nan
-                        df = df.replace(0.0, np.nan)
-                        s = df.style.highlight_max(props='textbf:--rwrap;')
+    #                     # Remove the vae index
+    #                     df = df.drop('\\ac{VAE}', axis=0)
+    #                     # remove the har index if ts != 20
+    #                     if ts != 20:
+    #                         df = df.drop('\\ac{HAR}', axis=0)
+    #                     # set all 0.0 float values to nan
+    #                     df = df.replace(0.0, np.nan)
+    #                     s = df.style.highlight_max(props='textbf:--rwrap;')
 
-                        s.format('{:.1f}', na_rep="-")
+    #                     s.format('{:.1f}', na_rep="-")
 
-                        s.to_latex(
-                            buf='../feature_paper/figs/dstat/dstat_%s_%s_%s_%s_%s_rmse.tex' % (
-                                otype, ts, dd, feature, mmodel),
-                            column_format='l'*df.columns.size, hrules=True)
+    #                     s.to_latex(
+    #                         buf='../feature_paper/figs/dstat/
+    # dstat_%s_%s_%s_%s_%s_rmse.tex' % (
+    #                             otype, ts, dd, feature, mmodel),
+    #                         column_format='l'*df.columns.size, hrules=True)
 
-                        # df.to_latex(buf='./plots/%s_%s_%s_%s_rmse.tex' % (
-                        #     otype, ts, dd, mmodel), header=True)
+    # df.to_latex(buf='./plots/%s_%s_%s_%s_rmse.tex' % (
+    #     otype, ts, dd, mmodel), header=True)
 
     # XXX: The trading part, only for the best model
     models = ['ridge', 'ssviridge', 'plsridge', 'ctridge',
@@ -1786,27 +1837,45 @@ if __name__ == '__main__':
         # XXX: Change or add to the loops as needed
         for dd in ['figs']:
             for ts in [5]:
-                # XXX: tskridge leads to loss after 2019, why?
-                # XXX: I think it is overflowing, most likely!
-                # XXX: ssviridge performs the best!!
                 for model in models:
                     name = ('./final_results/%s_%s_ts_%s_model_%s.npy.gz' %
                             (otype, dd, ts, model))
                     dates, y, yp = getpreds_trading(name, otype)
                     trade(dates, y, yp, otype, model)
 
-    resa = dict()
-    resb = dict()
     for otype in ['call', 'put']:
+        alphas = list()
+        betas = list()
+        cagrs = list()
+        wins = list()
+        maxs = list()
+        mins = list()
+        avgs = list()
+        medians = list()
+        sds = list()
+        srs = list()
+        ns = list()
         # XXX: Change or add to the loops as needed
         for dd in ['figs']:
             for ts in [5]:
-                for model in ['tskridge']:
-                    analyse_trades(otype, model, ts, resa, resb)
-        df = pd.DataFrame(resa, index=[0])
-        df.to_csv('./trades/alpha_%s.csv' % otype)
-        df = pd.DataFrame(resb, index=[0])
-        df.to_csv('./trades/beta_%s.csv' % otype)
+                for model in models:
+                    analyse_trades(otype, model, ts,
+                                   alphas, betas,
+                                   cagrs, wins,
+                                   maxs, mins,
+                                   avgs, medians, sds, srs, ns)
+        df = pd.DataFrame({'alpha': alphas, 'beta': betas,
+                           'cagr (%)': cagrs, 'win (%)': wins,
+                           'max (%)': maxs, 'min (%)': mins,
+                           'mean (%)': avgs, 'median (%)': medians,
+                           'std (%)': sds, 'sharpe ratio': srs,
+                           'N': ns},
+                          index=models)
+        df.to_csv('./trades/%s_trades.csv' % otype)
+        # df = pd.DataFrame(resa, index=[0])
+        # df.to_csv('./trades/alpha_%s.csv' % otype)
+        # df = pd.DataFrame(resb, index=[0])
+        # df.to_csv('./trades/beta_%s.csv' % otype)
 
     # XXX: The statistics for the complete dataset
     # cdfm = list()
