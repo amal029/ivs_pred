@@ -1445,8 +1445,12 @@ def lag_test(otype):
 def trade(dates, y, yp, otype, strat, eps=0, lags=5):
 
     def getTC(data, P=0.25):
-        TC = (data['Ask'] - data['Bid'])*P/data['Ask']
-        return np.mean(np.abs(TC))
+        # XXX: See: Options Trading Costs Are Lower than You
+        # Think Dmitriy Muravyev (page-4)
+        return 1.5/100
+        # # TC = (data['Ask'] - data['Bid'])*P/data['Ask']
+        # TC = (data['Mid'] - data['Last'])*P/data['Mid']
+        # return np.mean(np.abs(TC))
 
     def c_position_s(sign, CP, PP, TC):
         """This is trading a straddle
@@ -1495,7 +1499,7 @@ def trade(dates, y, yp, otype, strat, eps=0, lags=5):
                  'InterestR', 'Ask', 'Bid', 'Last']]
         data[d] = df
 
-    cash = 100000               # starting cash position 100K
+    cash = 10000               # starting cash position 100K
     ip = list()                 # list of traded indices (moneyness)
     jp = list()                 # list of traded indices (term structure)
     mp = list()                 # list of traded moneyness
@@ -1577,7 +1581,7 @@ def trade(dates, y, yp, otype, strat, eps=0, lags=5):
 
                 # XXX: Get transaction costs for this day as % of
                 # bid-ask spread.
-                TC = getTC(tdata, 0.25)
+                TC = getTC(tdata, 1)
                 cash += c_position_s(signl[-1], CPo, UPo, TC)
                 # cash += c_position(signl[-1], CPo, UPo, dl[-1], TC)
                 # XXX: Only append if we are not going to open a new
@@ -1591,7 +1595,7 @@ def trade(dates, y, yp, otype, strat, eps=0, lags=5):
         # XXX: You can open multiple (same or different) positions at
         # once.
         if open_p:
-            TC = getTC(tdata, 0.25)
+            TC = getTC(tdata, 1)
             ccash = o_position_s(dhat[i, j], CP, PP, TC)
             # ccash = o_position(dhat[i, j], CP, S, Delta, TC)
             if cash + ccash >= 0:
@@ -1638,6 +1642,7 @@ def trade(dates, y, yp, otype, strat, eps=0, lags=5):
 def analyse_trades(otype, model, lags, alpha, betas,
                    cagrs, wins, maxs, mins, avgs, medians,
                    sds, srs, ns, rf=3.83/(100), Y=9):
+
     import warnings
     warnings.filterwarnings("ignore")
     # print('Model %s_%s_%s: ' % (model, otype, lags))
@@ -1656,18 +1661,22 @@ def analyse_trades(otype, model, lags, alpha, betas,
 
     prdf['Date'] = pd.to_datetime(prdf['dates'], format='%Y-%m-%d')
     mrdf['Date'] = pd.to_datetime(mrdf['dates'], format='%Y-%m-%d')
-    prdf['pct_chg'] = prdf.groupby(prdf.Date.dt.year)['cash'].pct_change()
-    mrdf['pct_chg'] = mrdf.groupby(mrdf.Date.dt.year)['Price'].pct_change()
+    # prdf['pct_chg'] = prdf.groupby(prdf.Date.dt.year)['cash'].pct_change()
+    # mrdf['pct_chg'] = mrdf.groupby(mrdf.Date.dt.year)['Price'].pct_change()
 
     # XXX: Expected portfolio return
-    rp = prdf.groupby(prdf.Date.dt.year)['pct_chg'].sum()
+    rp = prdf.groupby(prdf.Date.dt.year)['cash'].apply(
+        lambda x: (x.values[-1]-x.values[0])/x.values[0])
     # rp = prdf['cash'].pct_change().dropna()
+    # print(rp)
     # rp = np.log(prdf['cash']).diff().dropna()
     # XXX: Expected market return
-    rm = mrdf.groupby(mrdf.Date.dt.year)['pct_chg'].sum()
+    rm = mrdf.groupby(mrdf.Date.dt.year)['Price'].apply(
+        lambda x: (x.values[-1]-x.values[0])/x.values[0])
     # rm = mrdf['Price'].pct_change().dropna()
     # rm = np.log(mrdf['Price']).diff().dropna()
     # print(rp)
+
     trp = pd.DataFrame({'Years': rp.index, '% Return': rp.values*100})
     trp.plot.bar(x='Years', y='% Return')
     plt.savefig('./trades/%s_%s_%s.pdf' % (model, otype, lags),
