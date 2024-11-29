@@ -116,6 +116,7 @@ def regularized_incomplete_beta(
 
 def dm_test(
     V: np.typing.ArrayLike,
+    V2: np.typing.ArrayLike,
     P1: np.typing.ArrayLike,
     P2: np.typing.ArrayLike,
     *,
@@ -131,6 +132,9 @@ def dm_test(
     ----------
     V:  Array like
         The actual timeseries.
+    
+    V2: Array like
+        The actual timeseries for the second prediction series.
 
     P1: Array like
         First prediction series.
@@ -158,7 +162,7 @@ def dm_test(
     statistic, the second is the p-value.
 
     """
-    if not (V.shape == P1.shape == P2.shape):
+    if not (V.shape == P1.shape == P2.shape == V2.shape):
         raise InvalidParameterException(
             "Actual timeseries and prediction series must be of same shape."
         )
@@ -172,7 +176,7 @@ def dm_test(
     # XXX: https://real-statistics.com/time-series-analysis/forecasting-accuracy/diebold-mariano-test/
     n = P1.shape[0]
     l1 = loss(V, P1)
-    l2 = loss(V, P2)
+    l2 = loss(V2, P2)
     D = l1**2 - l2**2
     mean = float(np.mean(D))
     D = D.tolist()

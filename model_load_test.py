@@ -1051,15 +1051,15 @@ def call_dmtest(otype, mmodel, models):
                     assert (np.array_equal(y, yk))
                     # XXX: Now we can do Diebold mariano test
                     try:
-                        dstat, pval = dmtest.dm_test(y, yp, ypk)
+                        dstat, pval = dmtest.dm_test(y, yk, yp, ypk)
                     except dmtest.ZeroVarianceException:
                         dstat, pval = np.nan, np.nan
                     fd[ts][i][j] = dstat
                     fp[ts][i][j] = pval
                     # XXX: We have to transpose these, because they are
                     # transposed in getpreds!
-                    r2v[ts][i][j] = cr2_score(y.T, yp.T, ypk.T)*100
-                    r2p[ts][i][j] = cr2_score_pval(y.T, yp.T, ypk.T,
+                    r2v[ts][i][j] = cr2_score(y.T, yk.T, yp.T, ypk.T)*100
+                    r2p[ts][i][j] = cr2_score_pval(y.T, yk.T, yp.T, ypk.T,
                                                    greater=False)
         # XXX: Save the results of dmtest
         header = ','.join(models)
@@ -1278,20 +1278,23 @@ def r2_rmse_score_mt(otype, models=['pmridge', 'tskridge']):
                     # XXX: Perform Diebold mariano test for yp1 and yp2
                     assert (np.array_equal(y1, y2))
                     yr = y1[:, m[0]:m[1], t[0]:t[1]]
+                    yr2 = y2[:, m[0]:m[1], t[0]:t[1]]
                     ypr1 = yp1[:, m[0]:m[1], t[0]:t[1]]
                     ypr2 = yp2[:, m[0]:m[1], t[0]:t[1]]
                     yr = yr.reshape(yr.shape[0], yr.shape[1]*yr.shape[2])
+                    yr2 = yr2.reshape(yr2.shape[0], yr2.shape[1]*yr2.shape[2])
                     ypr1 = ypr1.reshape(ypr1.shape[0],
                                         ypr1.shape[1]*ypr1.shape[2])
                     ypr2 = ypr2.reshape(ypr2.shape[0],
                                         ypr2.shape[1]*ypr2.shape[2])
                     dstat, pval = dmtest.dm_test(np.transpose(yr),
+                                                 np.transpose(yr2),
                                                  np.transpose(ypr1),
                                                  np.transpose(ypr2))
                     dm[tn][mi] = dstat
                     dmp[tn][mi] = pval
-                    rm[tn][mi] = cr2_score(yr, ypr1, ypr2)*100
-                    rmp[tn][mi] = cr2_score_pval(yr, ypr1, ypr2, greater=False)
+                    rm[tn][mi] = cr2_score(yr, yr2, ypr1, ypr2)*100
+                    rmp[tn][mi] = cr2_score_pval(yr, yr2, ypr1, ypr2, greater=False)
 
             # XXX: Write the data frame to file
             # df1.to_csv('./plots/mt_r2_%s_%s_%s_%s.csv' % (model1, otype, ts,
@@ -1427,11 +1430,11 @@ def lag_test(otype):
                     y2, yp2 = load(name, dt=dt)
                     assert (np.array_equal(y1, y2))
                     try:
-                        dstat, pval = dmtest.dm_test(y1.T, yp2.T, yp1.T)
+                        dstat, pval = dmtest.dm_test(y1.T, y2.T, yp1.T, yp2.T)
                     except dmtest.ZeroVarianceException:
                         dstat, pval = np.nan, np.nan
-                    rval = cr2_score(y1, yp2, yp1)
-                    rpval = cr2_score_pval(y1, yp2, yp1, greater=False)
+                    rval = cr2_score(y1, y2, yp1, yp2)
+                    rpval = cr2_score_pval(y1, y2, yp1, yp2, greater=False)
                     # XXX: Append to the dict list
                     dstatf[ts].append(dstat)
                     dstatpf[ts].append(pval)
