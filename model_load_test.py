@@ -1442,15 +1442,13 @@ def lag_test(otype):
             print(model, r' R^2: ', r2f, r2pf)
 
 
-def trade(dates, y, yp, otype, strat, eps=0, lags=5):
+def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
 
     def getTC(data, P=0.25):
         # XXX: See: Options Trading Costs Are Lower than You
         # Think Dmitriy Muravyev (page-4)
-        return 1.5/100
-        # # TC = (data['Ask'] - data['Bid'])*P/data['Ask']
-        # TC = (data['Mid'] - data['Last'])*P/data['Mid']
-        # return np.mean(np.abs(TC))
+        return 0/100
+        # return 2.5/100
 
     def c_position_s(sign, CP, PP, TC):
         """This is trading a straddle
@@ -1499,7 +1497,7 @@ def trade(dates, y, yp, otype, strat, eps=0, lags=5):
                  'InterestR', 'Ask', 'Bid', 'Last']]
         data[d] = df
 
-    cash = 10000               # starting cash position 100K
+    cash = 5000               # starting cash position 100K
     ip = list()                 # list of traded indices (moneyness)
     jp = list()                 # list of traded indices (term structure)
     mp = list()                 # list of traded moneyness
@@ -1512,6 +1510,7 @@ def trade(dates, y, yp, otype, strat, eps=0, lags=5):
     signl = list()              # list of traded volatility
     cashl = list()              # list of cash positions
     trade_date = list()   # list of trade dates
+    pos_date = list()
     open_position = False       # do we have a current open position?
 
     # XXX: Attach the underlying price
@@ -1533,6 +1532,9 @@ def trade(dates, y, yp, otype, strat, eps=0, lags=5):
         marketPrice.append(UP)
         # XXX: Now get the highest dhat point
         i, j = np.unravel_index(np.argmax(ddhat, axis=None), ddhat.shape)
+
+        # XXX: Another technique to use min instead of max
+        # i, j = np.unravel_index(np.argmin(ddhat, axis=None), ddhat.shape)
 
         # XXX: Only if the change is greater than some filter (eps) --
         # trade.
@@ -1559,25 +1561,66 @@ def trade(dates, y, yp, otype, strat, eps=0, lags=5):
             open_p = True       # open a position later
 
         if open_position:   # is position already open?
-            if i == ip[-1] and j == jp[-1]:
-                open_p = False  # just hold
-            # XXX: Remove this line if you want to close it everyday
-            if (not open_p) or (open_p and (i != ip[-1] and j != jp[-1])):
-                UPo = mp[-1]*UP
-                if otype == 'call':
-                    ecall = BlackScholesCall(S=UP, K=UPo, T=tp[-1],
-                                             r=R, sigma=y[t][i, j])
+            # XXX: Get the days that have passed by
+            trd = pd.to_datetime(str(pos_date[-1]), format='%Y%m%d')
+            today = pd.to_datetime(str(dates[t]), format='%Y%m%d')
+            # print('Days to maturity: ', tp[-1]*365)
+            # print('Today: ', today, 'Trad day: ', trd)
+            # print('days gone: ', (today - trd).days)
+            DTM = tp[-1]*365 - (today-trd).days
+
+            # XXX: Maturity has reached. Maturity might be a weekend,
+            # because of abstract tau.
+            if DTM <= 0:
+                # print('Maturity today: ', int(DTM))
+                # XXX: Close the position in a different way
+                DTM_UP = data[dates[t-int(DTM)]]['UnderlyingPrice'].values[0]
+                K = Kp[-1]
+                TC = getTC(tdata, 1)
+                if signl[-1] > 0:
+                    # FIXME: Need to correctly add the transaction costs
+                    # here on maturity dates.
+                    res = (max(DTM_UP-K, 0) + max(K-DTM_UP, 0)) - TC
                 else:
-                    ecall = BlackScholesPut(S=UP, K=UPo, T=tp[-1],
-                                            r=R, sigma=y[t][i, j])
+                    res = -(max(DTM_UP-K, 0) + max(K-DTM_UP, 0)) - TC
+                cash += res
+                if not open_p:
+                    cashl.append(cash)
+                    trade_date.append(dates[t])
+                open_position = False
+                # print('Position closed on Maturity')
+
+            elif i == ip[-1] and j == jp[-1]:
+                # print('holding!')
+                open_p = False  # just hold
+
+            else:
+                UPo = Kp[-1]
+                # UPo = mp[-1]*UP
+
+                days_gone = (today - trd).days//pred.TSTEP
+                days_left = (today - trd).days/365  # days to subtract
+                # print('closing the position')
+
+                # T = 1e-2 if tp[-1]-days_left <= 0 else tp[-1]-days_left
+                # J = 0 if jp[-1]-days_gone < 0 else jp[-1]-days_gone
+                T = tp[-1]-days_left
+                J = jp[-1]-days_gone
+
+                if otype == 'call':
+                    ecall = BlackScholesCall(S=UP, K=UPo, T=T,
+                                             r=R, sigma=y[t][ip[-1], J])
+                else:
+                    ecall = BlackScholesPut(S=UP, K=UPo, T=T,
+                                            r=R, sigma=y[t][ip[-1], J])
                 CPo = ecall.price()
 
                 if otype == 'call':
-                    UPo = BlackScholesPut(S=UP, K=UPo, T=tp[-1],
-                                          r=R, sigma=y[t][i, j]).price()
+                    UPo = BlackScholesPut(S=UP, K=UPo, T=T,
+                                          r=R, sigma=y[t][ip[-1], J]).price()
                 else:
-                    UPo = BlackScholesCall(S=UP, K=UPo, T=tp[-1],
-                                           r=R, sigma=y[t][i, j]).price()
+                    UPo = BlackScholesCall(S=UP, K=UPo, T=T,
+                                           r=R, sigma=y[t][ip[-1], J]).price()
 
                 # XXX: Get transaction costs for this day as % of
                 # bid-ask spread.
@@ -1614,6 +1657,9 @@ def trade(dates, y, yp, otype, strat, eps=0, lags=5):
                 cash += ccash
                 cashl.append(cash)
                 trade_date.append(dates[t])
+                pos_date.append(dates[t])
+                # print('Opened position on: ',
+                # pd.to_datetime(str(dates[t]), format='%Y%m%d'))
             open_p = False      # The position is now opened
         else:
             cashl.append(cash)
@@ -1737,7 +1783,7 @@ def analyse_trades(otype, model, lags, alpha, betas,
     medians.append(dprdf.median()*100)
     sds.append(dprdf.std()*100)
     srs.append(((cagr_rp-rf)/dprdf.std()))
-    wins.append(dprdf[dprdf >= 0].shape[0]/dprdf.shape[0]*100)
+    wins.append(dprdf[dprdf > 0].shape[0]/ns[-1]*100)
     avgs.append(dprdf.mean()*100)
 
 
@@ -1878,7 +1924,7 @@ if __name__ == '__main__':
               'tskridge', 'tskplsridge', 'tsknsridge',
               'mskridge', 'msknsridge', 'mskplsridge',
               'pmridge', 'pmplsridge']
-    for otype in ['put', 'call']:
+    for otype in ['call', 'put']:
         # XXX: Change or add to the loops as needed
         for dd in ['figs']:
             for ts in [5]:
