@@ -1538,7 +1538,7 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
 
         # XXX: Only if the change is greater than some filter (eps) --
         # trade.
-        if ddhat[i, j]/y[t][i, j] >= eps:
+        if ddhat[i, j]/y[t][i, j] >= eps and yp[t+1][i, j] > 0:
             m = mms[i]
             tau = tts[j]
             S = UP
@@ -1546,18 +1546,29 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
             if otype == 'call':
                 ecall = BlackScholesCall(S=S, K=K, T=tau, r=R,
                                          sigma=y[t][i, j])
+                # ecallp = BlackScholesCall(S=S, K=K, T=tau, r=R,
+                #                           sigma=yp[t+1][i, j])
             else:
                 ecall = BlackScholesPut(S=S, K=K, T=tau, r=R,
                                         sigma=y[t][i, j])
+                # ecallp = BlackScholesPut(S=S, K=K, T=tau, r=R,
+                #                          sigma=yp[t+1][i, j])
             if otype == 'put':
                 PP = BlackScholesCall(S=S, K=K, T=tau, r=R,
                                       sigma=y[t][i, j]).price()
+                # PPp = BlackScholesCall(S=S, K=K, T=tau, r=R,
+                #                        sigma=yp[t+1][i, j]).price()
             else:
                 PP = BlackScholesPut(S=S, K=K, T=tau, r=R,
                                      sigma=y[t][i, j]).price()
+                # PPp = BlackScholesPut(S=S, K=K, T=tau, r=R,
+                #                       sigma=yp[t+1][i, j]).price()
 
             Delta = ecall.delta()
             CP = ecall.price()
+            # CPp = ecallp.price()
+            # XXX: Uncomment the line below for real trading
+            # if np.abs((CPp + PPp) - (CP + PP))/(CP+PP) >= 0.05:
             open_p = True       # open a position later
 
         if open_position:   # is position already open?
@@ -1659,7 +1670,7 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
                 trade_date.append(dates[t])
                 pos_date.append(dates[t])
                 # print('Opened position on: ',
-                # pd.to_datetime(str(dates[t]), format='%Y%m%d'))
+                #       pd.to_datetime(str(dates[t]), format='%Y%m%d'))
             open_p = False      # The position is now opened
         else:
             cashl.append(cash)
