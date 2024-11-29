@@ -1546,39 +1546,42 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
             if otype == 'call':
                 ecall = BlackScholesCall(S=S, K=K, T=tau, r=R,
                                          sigma=y[t][i, j])
-                # ecallp = BlackScholesCall(S=S, K=K, T=tau, r=R,
-                #                           sigma=yp[t+1][i, j])
+                ecallp = BlackScholesCall(S=S, K=K, T=tau, r=R,
+                                          sigma=yp[t+1][i, j])
             else:
                 ecall = BlackScholesPut(S=S, K=K, T=tau, r=R,
                                         sigma=y[t][i, j])
-                # ecallp = BlackScholesPut(S=S, K=K, T=tau, r=R,
-                #                          sigma=yp[t+1][i, j])
+                ecallp = BlackScholesPut(S=S, K=K, T=tau, r=R,
+                                         sigma=yp[t+1][i, j])
             if otype == 'put':
                 PP = BlackScholesCall(S=S, K=K, T=tau, r=R,
                                       sigma=y[t][i, j]).price()
-                # PPp = BlackScholesCall(S=S, K=K, T=tau, r=R,
-                #                        sigma=yp[t+1][i, j]).price()
+                PPp = BlackScholesCall(S=S, K=K, T=tau, r=R,
+                                       sigma=yp[t+1][i, j]).price()
             else:
                 PP = BlackScholesPut(S=S, K=K, T=tau, r=R,
                                      sigma=y[t][i, j]).price()
-                # PPp = BlackScholesPut(S=S, K=K, T=tau, r=R,
-                #                       sigma=yp[t+1][i, j]).price()
+                PPp = BlackScholesPut(S=S, K=K, T=tau, r=R,
+                                      sigma=yp[t+1][i, j]).price()
 
             Delta = ecall.delta()
             CP = ecall.price()
-            # CPp = ecallp.price()
+            CPp = ecallp.price()
+
             # XXX: Uncomment the line below for real trading
-            # if np.abs((CPp + PPp) - (CP + PP))/(CP+PP) >= 0.05:
-            open_p = True       # open a position later
+            if np.abs((CPp + PPp) - (CP + PP))/(CP+PP) >= 0.05:
+                open_p = True       # open a position later
 
         if open_position:   # is position already open?
             # XXX: Get the days that have passed by
             trd = pd.to_datetime(str(pos_date[-1]), format='%Y%m%d')
             today = pd.to_datetime(str(dates[t]), format='%Y%m%d')
-            # print('Days to maturity: ', tp[-1]*365)
-            # print('Today: ', today, 'Trad day: ', trd)
-            # print('days gone: ', (today - trd).days)
+            print('Days to maturity: ', tp[-1]*365)
+            print('Today: ', today, 'Trad day: ', trd)
+            print('days gone: ', (today - trd).days)
             DTM = tp[-1]*365 - (today-trd).days
+            print(mms[i], mp[-1], tp[-1]*365, tts[j]*365,
+                  tts[j]-((today-trd).days/365))
 
             # XXX: Maturity has reached. Maturity might be a weekend,
             # because of abstract tau.
@@ -1599,10 +1602,13 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
                     cashl.append(cash)
                     trade_date.append(dates[t])
                 open_position = False
-                # print('Position closed on Maturity')
+                print('Position closed on Maturity')
 
-            elif i == ip[-1] and j == jp[-1]:
-                # print('holding!')
+            # XXX: We have to redo all training with 1 day tts.
+            elif (mms[i] == mp[-1] and
+                  tp[-1] == tts[j]):
+                # elif i == ip[-1] and j == jp[-1]:
+                print('holding!')
                 open_p = False  # just hold
 
             else:
@@ -1611,7 +1617,7 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
 
                 days_gone = (today - trd).days//pred.TSTEP
                 days_left = (today - trd).days/365  # days to subtract
-                # print('closing the position')
+                print('closing the position')
 
                 # T = 1e-2 if tp[-1]-days_left <= 0 else tp[-1]-days_left
                 # J = 0 if jp[-1]-days_gone < 0 else jp[-1]-days_gone
@@ -1669,8 +1675,8 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
                 cashl.append(cash)
                 trade_date.append(dates[t])
                 pos_date.append(dates[t])
-                # print('Opened position on: ',
-                #       pd.to_datetime(str(dates[t]), format='%Y%m%d'))
+                print('Opened position on: ',
+                      pd.to_datetime(str(dates[t]), format='%Y%m%d'))
             open_p = False      # The position is now opened
         else:
             cashl.append(cash)
