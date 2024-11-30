@@ -1447,24 +1447,24 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
     def getTC(data, P=0.25):
         # XXX: See: Options Trading Costs Are Lower than You
         # Think Dmitriy Muravyev (page-4)
-        return 0/100
-        # return 2.5/100
+        # return 0/100
+        return 2.5/100
 
-    def c_position_s(sign, CP, PP, TC):
+    def c_position_s(sign, CP, PP, TC, N):
         """This is trading a straddle
         """
         tc = (CP * TC) + (PP * TC)
         if sign > 0:
-            return (CP + PP) - tc
+            return ((CP + PP) - tc)*N
         else:
-            return (-(CP + PP)) - tc
+            return ((-(CP + PP)) - tc)*N
 
-    def o_position_s(sign, CP, PP, TC):
+    def o_position_s(sign, CP, PP, TC, N):
         tc = CP * TC + PP * TC
         if sign > 0:
-            return (-(CP + PP)) - tc
+            return ((-(CP + PP)) - tc)*N
         else:
-            return (CP + PP) - tc
+            return ((CP + PP) - tc)*N
 
     def c_position(sign, CP, UP, delta, TC):
         """This is delta hedged
@@ -1483,6 +1483,7 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
         else:
             return (CP - (UP * delta)) - tc
 
+    N = 5                     # number of contracts to buy/sell every time
     mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
     # XXX: Now go through the TS
     tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
@@ -1497,7 +1498,7 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
                  'InterestR', 'Ask', 'Bid', 'Last']]
         data[d] = df
 
-    cash = 5000               # starting cash position 100K
+    cash = 10000               # starting cash position 100K
     ip = list()                 # list of traded indices (moneyness)
     jp = list()                 # list of traded indices (term structure)
     mp = list()                 # list of traded moneyness
@@ -1546,22 +1547,22 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
             if otype == 'call':
                 ecall = BlackScholesCall(S=S, K=K, T=tau, r=R,
                                          sigma=y[t][i, j])
-                ecallp = BlackScholesCall(S=S, K=K, T=tau, r=R,
+                ecallp = BlackScholesCall(S=S, K=K, T=tau-(1/365), r=R,
                                           sigma=yp[t+1][i, j])
             else:
                 ecall = BlackScholesPut(S=S, K=K, T=tau, r=R,
                                         sigma=y[t][i, j])
-                ecallp = BlackScholesPut(S=S, K=K, T=tau, r=R,
+                ecallp = BlackScholesPut(S=S, K=K, T=tau-(1/365), r=R,
                                          sigma=yp[t+1][i, j])
             if otype == 'put':
                 PP = BlackScholesCall(S=S, K=K, T=tau, r=R,
                                       sigma=y[t][i, j]).price()
-                PPp = BlackScholesCall(S=S, K=K, T=tau, r=R,
+                PPp = BlackScholesCall(S=S, K=K, T=tau-(1/365), r=R,
                                        sigma=yp[t+1][i, j]).price()
             else:
                 PP = BlackScholesPut(S=S, K=K, T=tau, r=R,
                                      sigma=y[t][i, j]).price()
-                PPp = BlackScholesPut(S=S, K=K, T=tau, r=R,
+                PPp = BlackScholesPut(S=S, K=K, T=tau-(1/365), r=R,
                                       sigma=yp[t+1][i, j]).price()
 
             Delta = ecall.delta()
@@ -1576,12 +1577,12 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
             # XXX: Get the days that have passed by
             trd = pd.to_datetime(str(pos_date[-1]), format='%Y%m%d')
             today = pd.to_datetime(str(dates[t]), format='%Y%m%d')
-            print('Days to maturity: ', tp[-1]*365)
-            print('Today: ', today, 'Trad day: ', trd)
-            print('days gone: ', (today - trd).days)
+            # print('Days to maturity: ', tp[-1]*365)
+            # print('Today: ', today, 'Trad day: ', trd)
+            # print('days gone: ', (today - trd).days)
             DTM = tp[-1]*365 - (today-trd).days
-            print(mms[i], mp[-1], tp[-1]*365, tts[j]*365,
-                  tts[j]-((today-trd).days/365))
+            # print(mms[i], mp[-1], tp[-1]*365, tts[j]*365,
+            #       tts[j]-((today-trd).days/365))
 
             # XXX: Maturity has reached. Maturity might be a weekend,
             # because of abstract tau.
@@ -1602,13 +1603,12 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
                     cashl.append(cash)
                     trade_date.append(dates[t])
                 open_position = False
-                print('Position closed on Maturity')
+                # print('Position closed on Maturity')
 
             # XXX: We have to redo all training with 1 day tts.
-            elif (mms[i] == mp[-1] and
-                  tp[-1] == tts[j]):
+            elif (mms[i] == mp[-1] and tp[-1] == tts[j]):
                 # elif i == ip[-1] and j == jp[-1]:
-                print('holding!')
+                # print('holding!')
                 open_p = False  # just hold
 
             else:
@@ -1617,7 +1617,7 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
 
                 days_gone = (today - trd).days//pred.TSTEP
                 days_left = (today - trd).days/365  # days to subtract
-                print('closing the position')
+                # print('closing the position')
 
                 # T = 1e-2 if tp[-1]-days_left <= 0 else tp[-1]-days_left
                 # J = 0 if jp[-1]-days_gone < 0 else jp[-1]-days_gone
@@ -1642,7 +1642,7 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
                 # XXX: Get transaction costs for this day as % of
                 # bid-ask spread.
                 TC = getTC(tdata, 1)
-                cash += c_position_s(signl[-1], CPo, UPo, TC)
+                cash += c_position_s(signl[-1], CPo, UPo, TC, N)
                 # cash += c_position(signl[-1], CPo, UPo, dl[-1], TC)
                 # XXX: Only append if we are not going to open a new
                 # position immediately
@@ -1656,7 +1656,7 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
         # once.
         if open_p:
             TC = getTC(tdata, 1)
-            ccash = o_position_s(dhat[i, j], CP, PP, TC)
+            ccash = o_position_s(dhat[i, j], CP, PP, TC, N)
             # ccash = o_position(dhat[i, j], CP, S, Delta, TC)
             if cash + ccash >= 0:
                 open_position = True  # for closing the position later
@@ -1675,8 +1675,8 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
                 cashl.append(cash)
                 trade_date.append(dates[t])
                 pos_date.append(dates[t])
-                print('Opened position on: ',
-                      pd.to_datetime(str(dates[t]), format='%Y%m%d'))
+                # print('Opened position on: ',
+                #       pd.to_datetime(str(dates[t]), format='%Y%m%d'))
             open_p = False      # The position is now opened
         else:
             cashl.append(cash)
@@ -1936,20 +1936,25 @@ if __name__ == '__main__':
     # df.to_latex(buf='./plots/%s_%s_%s_%s_rmse.tex' % (
     #     otype, ts, dd, mmodel), header=True)
 
+    def setup_trade(model):
+        for otype in ['call', 'put']:
+            # XXX: Change or add to the loops as needed
+            for dd in ['figs']:
+                for ts in [5]:
+                    name = ('./final_results/%s_%s_ts_%s_model_%s.npy.gz' %
+                            (otype, dd, ts, model))
+                    print('Doing model: ', name)
+                    dates, y, yp = getpreds_trading(name, otype)
+                    trade(dates, y, yp, otype, model)
+
     # XXX: The trading part, only for the best model
     models = ['ridge', 'ssviridge', 'plsridge', 'ctridge',
               'tskridge', 'tskplsridge', 'tsknsridge',
               'mskridge', 'msknsridge', 'mskplsridge',
               'pmridge', 'pmplsridge']
-    for otype in ['call', 'put']:
-        # XXX: Change or add to the loops as needed
-        for dd in ['figs']:
-            for ts in [5]:
-                for model in models:
-                    name = ('./final_results/%s_%s_ts_%s_model_%s.npy.gz' %
-                            (otype, dd, ts, model))
-                    dates, y, yp = getpreds_trading(name, otype)
-                    trade(dates, y, yp, otype, model)
+    from joblib import Parallel, delayed
+    Parallel(n_jobs=-1)(delayed(setup_trade)(model)
+                        for model in models)
 
     for otype in ['call', 'put']:
         alphas = list()
