@@ -33,8 +33,8 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
     def getTC(data, P=0.25):
         # XXX: See: Options Trading Costs Are Lower than You
         # Think Dmitriy Muravyev (page-4)
-        # return 0/100
         return 2.5/100
+        # return 2.5/100
 
     def c_position_s(sign, CP, PP, TC, N):
         """This is trading a straddle
@@ -139,7 +139,9 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
             CPp = ecallp.price()
 
             # XXX: Uncomment the line below for real trading
-            if np.abs((CPp + PPp) - (CP + PP))/(CP+PP) >= 0.05:
+            if (np.abs((CPp + PPp) - (CP + PP))/(CP+PP) >= 0.05 and
+                # XXX: Only long positions taken, no shorts
+                dhat[i, j] > 0):
                 open_p = True       # open a position later
 
         if open_position:   # is position already open?
@@ -270,7 +272,7 @@ def analyse_trades(otype, model, lags, alpha, betas,
 
     import warnings
     warnings.filterwarnings("ignore")
-    # print('Model %s_%s_%s: ' % (model, otype, lags))
+    print('Model %s_%s_%s: ' % (model, otype, lags))
     mrdf = pd.read_csv('./trades/marketPrice.csv')
     prdf = pd.read_csv('./trades/%s_%s_%s.csv' % (model, otype, lags))
 
@@ -297,14 +299,14 @@ def analyse_trades(otype, model, lags, alpha, betas,
     rp = prdf.groupby(prdf.Date.dt.year)['cash'].apply(
         lambda x: (x.values[-1]-x.values[0])/x.values[0])
     # rp = prdf['cash'].pct_change().dropna()
-    # print(rp)
+    # print(rp*100)
     # rp = np.log(prdf['cash']).diff().dropna()
     # XXX: Expected market return
     rm = mrdf.groupby(mrdf.Date.dt.year)['Price'].apply(
         lambda x: (x.values[-1]-x.values[0])/x.values[0])
     # rm = mrdf['Price'].pct_change().dropna()
     # rm = np.log(mrdf['Price']).diff().dropna()
-    # print(rp)
+    print(rp*100)
 
     trp = pd.DataFrame({'Years': rp.index, '% Return': rp.values*100})
     trp.plot.bar(x='Years', y='% Return')
@@ -342,12 +344,19 @@ def analyse_trades(otype, model, lags, alpha, betas,
     else:
         alpha = -np.inf
 
-    # XXX: Statsitic data for trades
-    dprdf = prdf['cash'].pct_change().dropna()
+    # XXX: Get the 10 year return (risk free rate)
+    # dgs = pd.read_csv('DGS10.csv')
+    # XXX: Now get the rate for the same dates as the prdf
+    # rfrs = dgs[dgs['DATE'].isin(prdf['dates'])]
+    # print(dgs.shape, prdf.shape)
+    # print(rfrs)
+    # print(prdf)
 
+    # XXX: Statsitic data for trades
     # XXX: Append to lists
     dprdf = prdf['cash'].pct_change().dropna()
-    alphas.append(alpha)
+    dmrdf = mrdf['Price'].pct_change().dropna()
+    alphas.append(alpha*100)
     betas.append(beta)
     ns.append(dprdf[dprdf != 0].shape[0])
     cagrs.append(cagr_rp*100)
@@ -355,9 +364,19 @@ def analyse_trades(otype, model, lags, alpha, betas,
     mins.append(dprdf.min()*100)
     medians.append(dprdf.median()*100)
     sds.append(dprdf.std()*100)
-    srs.append(((cagr_rp-rf)/dprdf.std()))
+    # XXX: This is the quant sharpe at the end of the whole thing
+    srs.append(((dprdf-dmrdf).mean()/(dprdf - dmrdf).std()))
     wins.append(dprdf[dprdf > 0].shape[0]/ns[-1]*100)
     avgs.append(dprdf.mean()*100)
+
+    # XXX: Now the rolling sharpe ratio
+    K = 252                     # number of trading days/year (approx)
+    rsr = (dprdf - dmrdf).rolling(K).apply(lambda x:
+                                           x.mean()/x.std()*np.sqrt(K))
+    plt.plot(range(len(rsr)), rsr)
+    plt.savefig('./trades/%s_%s_%s_rsr.pdf' % (model, otype, lags),
+                bbox_inches='tight')
+    plt.close()
 
 
 if __name__ == '__main__':
@@ -372,16 +391,16 @@ if __name__ == '__main__':
                             (otype, dd, ts, model))
                     print('Doing model: ', name)
                     dates, y, yp = getpreds_trading(name, otype)
-                    trade(dates, y, yp, otype, model)
+                    trade(dates, y, yp, otype, model, lags=ts)
 
     # XXX: The trading part, only for the best model
     models = ['ridge', 'ssviridge', 'plsridge', 'ctridge',
               'tskridge', 'tskplsridge', 'tsknsridge',
               'mskridge', 'msknsridge', 'mskplsridge',
               'pmridge', 'pmplsridge']
-    from joblib import Parallel, delayed
-    Parallel(n_jobs=-1)(delayed(setup_trade)(model)
-                        for model in models)
+    # from joblib import Parallel, delayed
+    # Parallel(n_jobs=-1)(delayed(setup_trade)(model)
+    #                     for model in models)
 
     for otype in ['call', 'put']:
         alphas = list()
