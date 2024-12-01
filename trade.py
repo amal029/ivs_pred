@@ -33,8 +33,8 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
     def getTC(data, P=0.25):
         # XXX: See: Options Trading Costs Are Lower than You
         # Think Dmitriy Muravyev (page-4)
+        # return 0/100
         return 2.5/100
-        # return 2.5/100
 
     def c_position_s(sign, CP, PP, TC, N):
         """This is trading a straddle
@@ -52,7 +52,7 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
         else:
             return ((CP + PP) - tc)*N
 
-    N = 5                     # number of contracts to buy/sell every time
+    N = 1                     # number of contracts to buy/sell every time
     mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
     # XXX: Now go through the TS
     tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
@@ -138,8 +138,7 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
             CP = ecall.price()
             CPp = ecallp.price()
 
-            # XXX: Uncomment the line below for real trading
-            if (np.abs((CPp + PPp) - (CP + PP))/(CP+PP) >= 0.05 and
+            if (np.abs((CPp + PPp) - (CP + PP))/(CP+PP) > 0.05 and
                 # XXX: Only long positions taken, no shorts
                 dhat[i, j] > 0):
                 open_p = True       # open a position later
@@ -372,16 +371,20 @@ def analyse_trades(otype, model, lags, alpha, betas,
     mins.append(dprdf.min()*100)
     medians.append(dprdf.median()*100)
     sds.append(dprdf.std()*100)
-    # XXX: This is the quant sharpe at the end of the whole thing
-    srs.append(((dprdf-prdf['rf'][1:]).mean() /
-                (dprdf - prdf['rf'][1:]).std())*np.sqrt(K))
+    # srs.append(((dprdf-prdf['rf'][1:]).mean() /
+    #             (dprdf - prdf['rf'][1:]).std())*np.sqrt(K))
     wins.append(dprdf[dprdf > 0].shape[0]/ns[-1]*100)
     avgs.append(dprdf.mean()*100)
 
     # XXX: Now the rolling sharpe ratio
     rsr = (dprdf - prdf['rf'][1:]).rolling(K).apply(
         lambda x: x.mean()/x.std()*np.sqrt(K))
-    plt.plot(range(len(rsr)), rsr)
+    dfrsrs = pd.DataFrame({'Date': prdf['Date'][1:], 'sr': rsr})
+    # XXX: This is the quant sharpe at the end of the whole thing
+    srs.append(rsr.mean())      # expected sharpe overall
+    dfrsrs.plot.line(x='Date', y='sr', label='%s' % (model))
+    plt.ylabel('Share Ratio')
+    plt.legend()
     plt.savefig('./trades/%s_%s_%s_rsr.pdf' % (model, otype, lags),
                 bbox_inches='tight')
     plt.close()
@@ -406,9 +409,9 @@ if __name__ == '__main__':
               'tskridge', 'tskplsridge', 'tsknsridge',
               'mskridge', 'msknsridge', 'mskplsridge',
               'pmridge', 'pmplsridge']
-    # from joblib import Parallel, delayed
-    # Parallel(n_jobs=-1)(delayed(setup_trade)(model)
-    #                     for model in models)
+    from joblib import Parallel, delayed
+    Parallel(n_jobs=-1)(delayed(setup_trade)(model)
+                        for model in models)
 
     for otype in ['call', 'put']:
         alphas = list()
