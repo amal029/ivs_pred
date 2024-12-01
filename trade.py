@@ -272,7 +272,7 @@ def analyse_trades(otype, model, lags, alpha, betas,
 
     import warnings
     warnings.filterwarnings("ignore")
-    print('Model %s_%s_%s: ' % (model, otype, lags))
+    # print('Model %s_%s_%s: ' % (model, otype, lags))
     mrdf = pd.read_csv('./trades/marketPrice.csv')
     prdf = pd.read_csv('./trades/%s_%s_%s.csv' % (model, otype, lags))
 
@@ -306,7 +306,7 @@ def analyse_trades(otype, model, lags, alpha, betas,
         lambda x: (x.values[-1]-x.values[0])/x.values[0])
     # rm = mrdf['Price'].pct_change().dropna()
     # rm = np.log(mrdf['Price']).diff().dropna()
-    print(rp*100)
+    # print(rp*100)
 
     trp = pd.DataFrame({'Years': rp.index, '% Return': rp.values*100})
     trp.plot.bar(x='Years', y='% Return')
@@ -345,17 +345,25 @@ def analyse_trades(otype, model, lags, alpha, betas,
         alpha = -np.inf
 
     # XXX: Get the 10 year return (risk free rate)
-    # dgs = pd.read_csv('DGS10.csv')
+    dgs = pd.read_csv('DGS10.csv')
+    for i, r in enumerate(dgs['DGS10']):
+        if r == '.':
+            dgs['DGS10'][i] = dgs['DGS10'][i-1]
+        dgs['DGS10'][i] = float(dgs['DGS10'][i])/(100*365)
+
     # XXX: Now get the rate for the same dates as the prdf
-    # rfrs = dgs[dgs['DATE'].isin(prdf['dates'])]
+    prdf['rf'] = [np.nan]*prdf.shape[0]
+    for i, d in enumerate(prdf['dates']):
+        prdf['rf'][i] = dgs[dgs['DATE'].isin([d])]['DGS10'].values[0]
     # print(dgs.shape, prdf.shape)
     # print(rfrs)
     # print(prdf)
 
     # XXX: Statsitic data for trades
+    K = 252                     # number of trading days/year (approx)
     # XXX: Append to lists
     dprdf = prdf['cash'].pct_change().dropna()
-    dmrdf = mrdf['Price'].pct_change().dropna()
+    # dmrdf = mrdf['Price'].pct_change().dropna()
     alphas.append(alpha*100)
     betas.append(beta)
     ns.append(dprdf[dprdf != 0].shape[0])
@@ -365,14 +373,14 @@ def analyse_trades(otype, model, lags, alpha, betas,
     medians.append(dprdf.median()*100)
     sds.append(dprdf.std()*100)
     # XXX: This is the quant sharpe at the end of the whole thing
-    srs.append(((dprdf-dmrdf).mean()/(dprdf - dmrdf).std()))
+    srs.append(((dprdf-prdf['rf'][1:]).mean() /
+                (dprdf - prdf['rf'][1:]).std())*np.sqrt(K))
     wins.append(dprdf[dprdf > 0].shape[0]/ns[-1]*100)
     avgs.append(dprdf.mean()*100)
 
     # XXX: Now the rolling sharpe ratio
-    K = 252                     # number of trading days/year (approx)
-    rsr = (dprdf - dmrdf).rolling(K).apply(lambda x:
-                                           x.mean()/x.std()*np.sqrt(K))
+    rsr = (dprdf - prdf['rf'][1:]).rolling(K).apply(
+        lambda x: x.mean()/x.std()*np.sqrt(K))
     plt.plot(range(len(rsr)), rsr)
     plt.savefig('./trades/%s_%s_%s_rsr.pdf' % (model, otype, lags),
                 bbox_inches='tight')
