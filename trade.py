@@ -58,7 +58,7 @@ def trade(dates, y, yp, otype, strat, eps=0.01, lags=5):
             # print('Open selling straddle')
             return ((CP + PP) - tc)*N
 
-    N = 1                     # number of contracts to buy/sell every time
+    N = 10                     # number of contracts to buy/sell every time
     mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
     # XXX: Now go through the TS
     tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
@@ -73,7 +73,7 @@ def trade(dates, y, yp, otype, strat, eps=0.01, lags=5):
                  'InterestR', 'Ask', 'Bid', 'Last']]
         data[d] = df
 
-    cash = 100000                # starting cash position 100K
+    cash = 100000               # starting cash position 100K
     ip = list()                 # list of traded indices (moneyness)
     jp = list()                 # list of traded indices (term structure)
     mp = list()                 # list of traded moneyness
@@ -188,11 +188,11 @@ def trade(dates, y, yp, otype, strat, eps=0.01, lags=5):
                     # FIXME: Need to correctly add the transaction costs
                     # here on maturity dates.
                     tc = max(DTM_UP-K, 0)*TC + max(K-DTM_UP, 0)*TC
-                    res = (max(DTM_UP-K, 0) + max(K-DTM_UP, 0)) - tc
+                    res = ((max(DTM_UP-K, 0) + max(K-DTM_UP, 0)) - tc)*N
                     # print('transaction cost: ', tc)
                 else:
                     tc = max(DTM_UP-K, 0)*TC + max(K-DTM_UP, 0)*TC
-                    res = -(max(DTM_UP-K, 0) + max(K-DTM_UP, 0)) - tc
+                    res = (-(max(DTM_UP-K, 0) + max(K-DTM_UP, 0)) - tc)*N
                     # print('transaction cost: ', tc)
                 cash += res
                 if not open_p:
@@ -233,7 +233,7 @@ def trade(dates, y, yp, otype, strat, eps=0.01, lags=5):
                 # bid-ask spread.
                 TC = getTC(tdata, 1)
                 CLOSE_POSITION = c_position_s(signl[-1], CPo, UPo, TC, N)
-                CCP = cashl[-1] + CLOSE_POSITION
+                # CCP = cashl[-1] + CLOSE_POSITION
 
                 # print('cashl[-1]: ', cashl[-1])
                 # print('CLOSE_POSITION: ', CLOSE_POSITION)
