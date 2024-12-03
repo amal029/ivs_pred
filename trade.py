@@ -28,28 +28,34 @@ def getpreds_trading(name1, otype):
             yp.reshape(dates.shape[0], MS, TS))
 
 
-def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
+def trade(dates, y, yp, otype, strat, eps=0.01, lags=5):
 
     def getTC(data, P=0.25):
         # XXX: See: Options Trading Costs Are Lower than You
         # Think Dmitriy Muravyev (page-4)
         # return 0/100
-        return 2.5/100
+        return 1.5/100
 
     def c_position_s(sign, CP, PP, TC, N):
         """This is trading a straddle
         """
         tc = (CP * TC) + (PP * TC)
+        # print('transaction cost: ', tc)
         if sign > 0:
+            # print('Close selling straddle')
             return ((CP + PP) - tc)*N
         else:
+            # print('Close buying straddle')
             return ((-(CP + PP)) - tc)*N
 
     def o_position_s(sign, CP, PP, TC, N):
         tc = CP * TC + PP * TC
+        # print('transaction cost: ', tc)
         if sign > 0:
+            # print('Open buying straddle')
             return ((-(CP + PP)) - tc)*N
         else:
+            # print('Open selling straddle')
             return ((CP + PP) - tc)*N
 
     N = 1                     # number of contracts to buy/sell every time
@@ -67,7 +73,7 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
                  'InterestR', 'Ask', 'Bid', 'Last']]
         data[d] = df
 
-    cash = 10000               # starting cash position 100K
+    cash = 10000                # starting cash position 10K
     ip = list()                 # list of traded indices (moneyness)
     jp = list()                 # list of traded indices (term structure)
     mp = list()                 # list of traded moneyness
@@ -87,8 +93,13 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
     mDates = list()
     marketPrice = list()
 
+    # XXX: Harvest profit
+    HARVEST = 0.05
+    MAX_DAYS_GONE = 400          # max days holding allowed
+
     # XXX: Actual trade
-    for t in range(0, dates.shape[0]-1):
+    MM = 1
+    for t in range(0, dates.shape[0]-MM):
         open_p = False
         # XXX: Get all the points from the real dataset
         tdata = data[dates[t]]
@@ -101,12 +112,17 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
         mDates.append(dates[t])
         marketPrice.append(UP)
         # XXX: Now get the highest dhat point
-        i, j = np.unravel_index(np.argmax(ddhat, axis=None), ddhat.shape)
+        # i, j = np.unravel_index(np.argmax(ddhat, axis=None), ddhat.shape)
+
+        # XXX: Just the closest date only
+        j = 0
+        i = np.argmax(ddhat[:, j])
+        # print('Max change index: ', i, j)
 
         # XXX: Another technique to use min instead of max
         # i, j = np.unravel_index(np.argmin(ddhat, axis=None), ddhat.shape)
 
-        # XXX: Only if the change is greater than some filter (eps) --
+        # XXX: Only if the change is greater/lesser than some filter (eps) --
         # trade.
         if ddhat[i, j]/y[t][i, j] >= eps and yp[t+1][i, j] > 0:
             m = mms[i]
@@ -138,19 +154,23 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
             CP = ecall.price()
             CPp = ecallp.price()
 
-            if (np.abs((CPp + PPp) - (CP + PP))/(CP+PP) > 0.05 and
-                # XXX: Only long positions taken, no shorts
-                dhat[i, j] > 0):
+            # XXX: Selling straddle -- dangerous
+            if (np.abs((CPp + PPp) - (CP + PP))/(CP+PP) < 0.01 and
+               (t % MM == 0 and dhat[i, j] < 0)):
+                open_p = True       # open a position later
+            # XXX: Buying straddle -- limited risk
+            elif (np.abs((CPp + PPp) - (CP + PP))/(CP+PP) > 0 and
+                  (t % MM == 0 and dhat[i, j] > 0)):
                 open_p = True       # open a position later
 
-        if open_position:   # is position already open?
+        if open_position and t % MM == 0:   # is position already open?
             # XXX: Get the days that have passed by
             trd = pd.to_datetime(str(pos_date[-1]), format='%Y%m%d')
             today = pd.to_datetime(str(dates[t]), format='%Y%m%d')
             # print('Days to maturity: ', tp[-1]*365)
             # print('Today: ', today, 'Trad day: ', trd)
             # print('days gone: ', (today - trd).days)
-            DTM = tp[-1]*365 - (today-trd).days
+            DTM = int(tp[-1]*365 - (today-trd).days)
             # print(mms[i], mp[-1], tp[-1]*365, tts[j]*365,
             #       tts[j]-((today-trd).days/365))
 
@@ -158,36 +178,36 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
             # because of abstract tau.
             if DTM <= 0:
                 # print('Maturity today: ', int(DTM))
-                # XXX: Close the position in a different way
+                # xxx: Close the position in a different way
                 DTM_UP = data[dates[t-int(DTM)]]['UnderlyingPrice'].values[0]
                 K = Kp[-1]
                 TC = getTC(tdata, 1)
+                # print('Underlying price on Maturity: ', DTM_UP)
+                # print('Straddle Strike price: ', K)
                 if signl[-1] > 0:
                     # FIXME: Need to correctly add the transaction costs
                     # here on maturity dates.
-                    res = (max(DTM_UP-K, 0) + max(K-DTM_UP, 0)) - TC
+                    tc = max(DTM_UP-K, 0)*TC + max(K-DTM_UP, 0)*TC
+                    res = (max(DTM_UP-K, 0) + max(K-DTM_UP, 0)) - tc
+                    # print('transaction cost: ', tc)
                 else:
-                    res = -(max(DTM_UP-K, 0) + max(K-DTM_UP, 0)) - TC
+                    tc = max(DTM_UP-K, 0)*TC + max(K-DTM_UP, 0)*TC
+                    res = -(max(DTM_UP-K, 0) + max(K-DTM_UP, 0)) - tc
+                    # print('transaction cost: ', tc)
                 cash += res
                 if not open_p:
                     cashl.append(cash)
                     trade_date.append(dates[t])
                 open_position = False
-                # print('Position closed on Maturity')
-
-            # XXX: We have to redo all training with 1 day tts.
-            elif (mms[i] == mp[-1] and tp[-1] == tts[j]):
-                # elif i == ip[-1] and j == jp[-1]:
-                # print('holding!')
-                open_p = False  # just hold
+                # print('Position closed on Maturity, cash: ', cash)
 
             else:
+                # XXX: Calculate the change for this day
                 UPo = Kp[-1]
                 # UPo = mp[-1]*UP
 
                 days_gone = (today - trd).days//pred.TSTEP
                 days_left = (today - trd).days/365  # days to subtract
-                # print('closing the position')
 
                 # T = 1e-2 if tp[-1]-days_left <= 0 else tp[-1]-days_left
                 # J = 0 if jp[-1]-days_gone < 0 else jp[-1]-days_gone
@@ -212,20 +232,57 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
                 # XXX: Get transaction costs for this day as % of
                 # bid-ask spread.
                 TC = getTC(tdata, 1)
-                cash += c_position_s(signl[-1], CPo, UPo, TC, N)
-                # cash += c_position(signl[-1], CPo, UPo, dl[-1], TC)
-                # XXX: Only append if we are not going to open a new
-                # position immediately
-                if not open_p:
-                    cashl.append(cash)
-                    trade_date.append(dates[t])
-                open_position = False
+                CLOSE_POSITION = c_position_s(signl[-1], CPo, UPo, TC, N)
+                CCP = cashl[-1] + CLOSE_POSITION
+
+                # print('cashl[-1]: ', cashl[-1])
+                # print('CLOSE_POSITION: ', CLOSE_POSITION)
+                # print('Close CP: ', CCP)
+                # XXX: We have to redo all training with 1 day tts.
+                # elif (mms[i] == mp[-1] and tp[-1] == tts[j]):
+                if CLOSE_POSITION >= 0:
+                    # print('CP: ', CCP, 'cashl[-1]', cashl[-1],
+                    #       '% change: ', CLOSE_POSITION/cashl[-1])
+                    if (CLOSE_POSITION/cashl[-1] >= HARVEST or
+                       (t + 1 >= dates.shape[0]-MM) or
+                       (today-trd).days >= MAX_DAYS_GONE):
+                        # print('closing and harvesting the profit')
+                        cash += CLOSE_POSITION
+                        # print('cash: ', cash)
+                        # cash += c_position(signl[-1], CPo, UPo, dl[-1], TC)
+                        # XXX: Only append if we are not going to open a new
+                        # position immediately
+                        if not open_p:
+                            cashl.append(cash)
+                            trade_date.append(dates[t])
+                        open_position = False
+                    else:
+                        # elif i == ip[-1] and j == jp[-1]:
+                        # print('holding!')
+                        open_p = False  # just hold
+
+                elif signl[-1] < 0:
+                    # print('Loss but continuing')
+                    open_p = False
+                elif signl[-1] > 0:
+                    # print('closing the position on loss')
+                    cash += CLOSE_POSITION
+                    # print('cash: ', cash)
+                    # cash += c_position(signl[-1], CPo, UPo, dl[-1], TC)
+                    # XXX: Only append if we are not going to open a new
+                    # position immediately
+                    if not open_p:
+                        cashl.append(cash)
+                        trade_date.append(dates[t])
+                    open_position = False
 
         # if open_p and (not open_position):
         # XXX: You can open multiple (same or different) positions at
         # once.
-        if open_p:
+        if open_p and (t + 1 < dates.shape[0]-MM):
             TC = getTC(tdata, 1)
+            # print('Opening CP:%s, PP:%s' % (CP, PP))
+            # print('Opening Next CP:%s, Next PP:%s' % (CPp, PPp))
             ccash = o_position_s(dhat[i, j], CP, PP, TC, N)
             # ccash = o_position(dhat[i, j], CP, S, Delta, TC)
             if cash + ccash >= 0:
@@ -247,11 +304,15 @@ def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
                 pos_date.append(dates[t])
                 # print('Opened position on: ',
                 #       pd.to_datetime(str(dates[t]), format='%Y%m%d'))
+                # print('cash when opening position: ', cashl[-1])
             open_p = False      # The position is now opened
         else:
+            # FIXME: This cash position should be mark to market
             cashl.append(cash)
             trade_date.append(dates[t])
             open_p = False      # Kinda done!
+
+    # XXX: Close any open positions
 
     import os
     if not os.path.exists('./trades/marketPrice.csv'):
@@ -373,7 +434,10 @@ def analyse_trades(otype, model, lags, alpha, betas,
     sds.append(dprdf.std()*100)
     # srs.append(((dprdf-prdf['rf'][1:]).mean() /
     #             (dprdf - prdf['rf'][1:]).std())*np.sqrt(K))
-    wins.append(dprdf[dprdf > 0].shape[0]/ns[-1]*100)
+    if ns[-1] != 0:
+        wins.append(dprdf[dprdf > 0].shape[0]/ns[-1]*100)
+    else:
+        wins.append(0)
     avgs.append(dprdf.mean()*100)
 
     # XXX: Now the rolling sharpe ratio
