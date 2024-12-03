@@ -73,7 +73,7 @@ def trade(dates, y, yp, otype, strat, eps=0.01, lags=5):
                  'InterestR', 'Ask', 'Bid', 'Last']]
         data[d] = df
 
-    cash = 10000                # starting cash position 10K
+    cash = 100000                # starting cash position 100K
     ip = list()                 # list of traded indices (moneyness)
     jp = list()                 # list of traded indices (term structure)
     mp = list()                 # list of traded moneyness
