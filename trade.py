@@ -328,7 +328,8 @@ def trade(dates, y, yp, otype, strat, eps=0.01, lags=5):
 
 def analyse_trades(otype, model, lags, alpha, betas,
                    cagrs, wins, maxs, mins, avgs, medians,
-                   sds, srs, ns, rf=3.83/(100), Y=9):
+                   sds, srs, ns, model_label, ax1, ax2, marker,
+                   rf=3.83/(100), Y=9):
 
     import warnings
     warnings.filterwarnings("ignore")
@@ -340,15 +341,21 @@ def analyse_trades(otype, model, lags, alpha, betas,
         lambda x:
         (x.values[-1]-x.values[0])/x.values[0]*100)
 
+    # XXX: For the paper
+    ax1.plot(prdf['dates'].values, prdf['pcash'].values,
+             label='%s' % model_label,
+             marker=marker, markevery=0.5)
     # XXX: Plot the portfolio
-    prdf.plot.line(x='dates', y='pcash', label='%s_%s' % (model, otype))
-    plt.xlabel('Years')
-    plt.ylabel('% P/L')
+    f, ax = plt.subplots(nrows=1, ncols=1)
+    prdf.plot.line(x='dates', y='pcash', label='%s' % (model_label),
+                   ax=ax)
+    ax.set_xlabel('Years')
+    ax.set_ylabel('% P/L')
     plt.xticks(rotation=45)
-    plt.legend()
+    ax.legend()
     plt.savefig('./trades/%s_%s_%s_portfolio.pdf' % (model, otype, lags),
                 bbox_inches='tight')
-    plt.close()
+    plt.close(f)
 
     prdf['Date'] = pd.to_datetime(prdf['dates'], format='%Y-%m-%d')
     mrdf['Date'] = pd.to_datetime(mrdf['dates'], format='%Y-%m-%d')
@@ -368,11 +375,12 @@ def analyse_trades(otype, model, lags, alpha, betas,
     # rm = np.log(mrdf['Price']).diff().dropna()
     # print(rp*100)
 
+    f, ax = plt.subplots(nrows=1, ncols=1)
     trp = pd.DataFrame({'Years': rp.index, '% Return': rp.values*100})
-    trp.plot.bar(x='Years', y='% Return')
+    trp.plot.bar(x='Years', y='% Return', ax=ax)
     plt.savefig('./trades/%s_%s_%s.pdf' % (model, otype, lags),
                 bbox_inches='tight')
-    plt.close()
+    plt.close(f)
 
     gn = (np.log((1+rm).mean()) - np.log(1+rf))
     gd = np.log((1+rm)).replace([np.inf, -np.inf], np.nan).dropna().var()
@@ -446,12 +454,17 @@ def analyse_trades(otype, model, lags, alpha, betas,
     dfrsrs = pd.DataFrame({'Date': prdf['Date'][1:], 'sr': rsr})
     # XXX: This is the quant sharpe at the end of the whole thing
     srs.append(rsr.mean())      # expected sharpe overall
-    dfrsrs.plot.line(x='Date', y='sr', label='%s' % (model))
-    plt.ylabel('Share Ratio')
-    plt.legend()
+    # XXX: For the paper
+    ax2.plot(dfrsrs['Date'], dfrsrs['sr'], label=model_label,
+             marker=marker, markevery=0.5)
+    # XXX: Just plotting
+    f, ax = plt.subplots(nrows=1, ncols=1)
+    dfrsrs.plot.line(x='Date', y='sr', label='%s' % (model_label), ax=ax)
+    ax.set_ylabel('Sharpe Ratio')
+    ax.legend()
     plt.savefig('./trades/%s_%s_%s_rsr.pdf' % (model, otype, lags),
                 bbox_inches='tight')
-    plt.close()
+    plt.close(f)
 
 
 if __name__ == '__main__':
@@ -462,17 +475,24 @@ if __name__ == '__main__':
             # XXX: Change or add to the loops as needed
             for dd in ['figs']:
                 for ts in [5]:
-                    name = ('./final_results/%s_%s_ts_%s_model_%s.npy.gz' %
-                            (otype, dd, ts, model))
+                    if not (model in ['har', 'mskhar']):
+                        name = ('./final_results/%s_%s_ts_%s_model_%s.npy.gz' %
+                                (otype, dd, ts, model))
+                    else:
+                        name = ('./final_results/%s_%s_ts_21_model_%s.npy.gz' %
+                                (otype, dd, model))
                     print('Doing model: ', name)
                     dates, y, yp = getpreds_trading(name, otype)
                     trade(dates, y, yp, otype, model, lags=ts)
 
     # XXX: The trading part, only for the best model
-    models = ['ridge', 'ssviridge', 'plsridge', 'ctridge',
-              'tskridge', 'tskplsridge', 'tsknsridge',
-              'mskridge', 'msknsridge', 'mskplsridge',
-              'pmridge', 'pmplsridge']
+    # models = ['har', 'mskhar', 'ridge', 'ssviridge',
+    #           'plsridge', 'ctridge',
+    #           'tskridge', 'tskplsridge', 'tsknsridge',
+    #           'mskridge', 'msknsridge', 'mskplsridge',
+    #           'pmridge', 'pmplsridge']
+    models = ['pmridge', 'mskhar', 'tskridge', 'har']
+    model_labels = ['Point-SAM', 'MS-HAR', 'TS-SAM', 'Surface-HAR']
     from joblib import Parallel, delayed
     Parallel(n_jobs=-1)(delayed(setup_trade)(model)
                         for model in models)
@@ -490,19 +510,41 @@ if __name__ == '__main__':
         srs = list()
         ns = list()
         # XXX: Change or add to the loops as needed
+        markers = ['*', 'o', '^', 'x']
+        f1, ax1 = plt.subplots(nrows=1, ncols=1)
+        f2, ax2 = plt.subplots(nrows=1, ncols=1)
         for dd in ['figs']:
             for ts in [5]:
-                for model in models:
+                count = 0
+                for model, model_label in zip(models, model_labels):
                     analyse_trades(otype, model, ts,
                                    alphas, betas,
                                    cagrs, wins,
                                    maxs, mins,
-                                   avgs, medians, sds, srs, ns)
-        df = pd.DataFrame({'alpha': alphas, 'beta': betas,
-                           'cagr (%)': cagrs, 'win (%)': wins,
-                           'max (%)': maxs, 'min (%)': mins,
-                           'mean (%)': avgs, 'median (%)': medians,
-                           'std (%)': sds, 'sharpe ratio': srs,
-                           'N': ns},
-                          index=models)
+                                   avgs, medians, sds, srs, ns,
+                                   model_label, ax1, ax2, markers[count])
+                    count += 1
+        ax1.legend()
+        ax1.set_xlabel('Years')
+        ax1.xaxis.set_major_locator(plt.MaxNLocator(5))
+        ax1.set_ylabel('% P/L')
+        ax2.legend()
+        ax2.set_xlabel('Years')
+        ax2.set_ylabel('Sharpe Ratio')
+        f1.savefig('../feature_paper/elsarticle/figs/portfolio_%s.pdf' % otype,
+                   bbox_inches='tight')
+        f2.savefig('../feature_paper/elsarticle/figs/srs_%s.pdf' % otype,
+                   bbox_inches='tight')
+        df = pd.DataFrame({
+            'N': ns,
+            'win (%)': wins,
+            'alpha': alphas,
+            'beta': betas,
+            'cagr (%)': cagrs,
+            'sharpe ratio': srs,
+            # 'max (%)': maxs, 'min (%)': mins,
+            # 'mean (%)': avgs, 'median (%)': medians,
+            # 'std (%)': sds,
+        }, index=model_labels)
         df.to_csv('./trades/%s_trades.csv' % otype)
+        df.to_latex('../feature_paper/elsarticle/figs/traderes_%s.tex' % otype)
