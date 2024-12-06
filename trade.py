@@ -536,12 +536,12 @@ if __name__ == '__main__':
         f2.savefig('../feature_paper/elsarticle/figs/srs_%s.pdf' % otype,
                    bbox_inches='tight')
         df = pd.DataFrame({
-            'N': ns,
-            'win (%)': wins,
-            'alpha': alphas,
-            'beta': betas,
-            'cagr (%)': cagrs,
-            'sharpe ratio': srs,
+            '# Trades': ns,
+            'Wins (%)': wins,
+            'Alpha (%)': alphas,
+            'Beta': betas,
+            'CAGR (%)': cagrs,
+            'Avg. SR': srs,
             # 'max (%)': maxs, 'min (%)': mins,
             # 'mean (%)': avgs, 'median (%)': medians,
             # 'std (%)': sds,
