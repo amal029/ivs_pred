@@ -486,13 +486,14 @@ if __name__ == '__main__':
                     trade(dates, y, yp, otype, model, lags=ts)
 
     # XXX: The trading part, only for the best model
-    # models = ['har', 'mskhar', 'ridge', 'ssviridge',
-    #           'plsridge', 'ctridge',
-    #           'tskridge', 'tskplsridge', 'tsknsridge',
-    #           'mskridge', 'msknsridge', 'mskplsridge',
-    #           'pmridge', 'pmplsridge']
-    models = ['pmridge', 'mskhar', 'tskridge', 'har']
-    model_labels = ['Point-SAM', 'MS-HAR', 'TS-SAM', 'Surface-HAR']
+    models = ['har', 'mskhar', 'ridge', 'ssviridge',
+              'plsridge', 'ctridge',
+              'tskridge', 'tskplsridge', 'tsknsridge',
+              'mskridge', 'msknsridge', 'mskplsridge',
+              'pmridge', 'pmplsridge']
+    # models = ['pmridge', 'mskhar', 'tskridge', 'har']
+    model_labels = models
+    # model_labels = ['Point-SAM', 'MS-HAR', 'TS-SAM', 'Surface-HAR']
     from joblib import Parallel, delayed
     Parallel(n_jobs=-1)(delayed(setup_trade)(model)
                         for model in models)
@@ -510,7 +511,8 @@ if __name__ == '__main__':
         srs = list()
         ns = list()
         # XXX: Change or add to the loops as needed
-        markers = ['*', 'o', '^', 'x']
+        markers = ['*', 'o', '^', 'x', '.', '1', '2', '3', '4', '8', 's',
+                   'X', 'd', 'D']
         f1, ax1 = plt.subplots(nrows=1, ncols=1)
         f2, ax2 = plt.subplots(nrows=1, ncols=1)
         for dd in ['figs']:
@@ -531,10 +533,14 @@ if __name__ == '__main__':
         ax2.legend()
         ax2.set_xlabel('Years')
         ax2.set_ylabel('Sharpe Ratio')
-        f1.savefig('../feature_paper/elsarticle/figs/portfolio_%s.pdf' % otype,
-                   bbox_inches='tight')
-        f2.savefig('../feature_paper/elsarticle/figs/srs_%s.pdf' % otype,
-                   bbox_inches='tight')
+        f1.savefig('./trades/portfolio_%s.pdf' %
+                   otype, bbox_inches='tight')
+        f2.savefig('./trades/srs_%s.pdf' %
+                   otype, bbox_inches='tight')
+        # f1.savefig('../feature_paper/elsarticle/figs/portfolio_%s.pdf' %
+        #            otype, bbox_inches='tight')
+        # f2.savefig('../feature_paper/elsarticle/figs/srs_%s.pdf' %
+        #            otype, bbox_inches='tight')
         df = pd.DataFrame({
             '# Trades': ns,
             'Wins (%)': wins,
@@ -547,4 +553,5 @@ if __name__ == '__main__':
             # 'std (%)': sds,
         }, index=model_labels)
         df.to_csv('./trades/%s_trades.csv' % otype)
-        df.to_latex('../feature_paper/elsarticle/figs/traderes_%s.tex' % otype)
+        # df.to_latex('../feature_paper/elsarticle/figs/traderes_%s.tex' %
+        #             otype)

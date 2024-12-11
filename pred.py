@@ -542,14 +542,14 @@ def interest_rates(dfs: dict):
         # XXX: Make the log of K/UnderlyingPrice
         df['m'] = (df['Strike']/df['UnderlyingPrice'])
         # XXX: Moneyness is not too far away from ATM
-        df = df[(df['m'] >= LM) & (df['m'] <= UM)]
+        # df = df[(df['m'] >= LM) & (df['m'] <= UM)]
         # XXX: Make the days to expiration
         df['Expiration'] = pd.to_datetime(df['Expiration'])
         df['DataDate'] = pd.to_datetime(df['DataDate'])
         df['tau'] = (df['Expiration'] - df['DataDate']).dt.days
         # XXX: Only those that are greater than at least 2 weeks ahead
         # and also not too ahead
-        df = df[(df['tau'] >= LT) & (df['tau'] <= UT)]
+        # df = df[(df['tau'] >= LT) & (df['tau'] <= UT)]
         df['tau'] = df['tau']/DAYS
 
         # XXX: implied volatility is not zero!
@@ -904,7 +904,7 @@ def build_gird_and_images(df, otype):
 
 def excel_to_images(dvf=True, otype='call', ironly=False):
     dir = '../../HistoricalOptionsData/'
-    years = [str(i) for i in range(2002, 2003)]
+    years = [str(i) for i in range(2002, 2024)]
     months = [
         'January', 'February',
         'March',
