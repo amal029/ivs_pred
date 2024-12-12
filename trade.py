@@ -316,11 +316,13 @@ def trade(dates, y, yp, otype, strat, eps=0.01, lags=5):
 
     import os
     if not os.path.exists('./trades/marketPrice.csv'):
-        mdates = pd.to_datetime(mDates, format='%Y%m%d')
+        tempDates = list(map(lambda x: str(x), mDates))
+        mdates = pd.to_datetime(tempDates, format='%Y%m%d')
         df = pd.DataFrame({'dates': mdates, 'Price': marketPrice})
         df.to_csv('./trades/marketPrice.csv')
 
-    trade_date = pd.to_datetime(trade_date, format='%Y%m%d')
+    temptradedate = list(map(lambda x: str(x), trade_date))
+    trade_date = pd.to_datetime(temptradedate, format='%Y%m%d')
     res = pd.DataFrame({'cash': cashl, 'dates': trade_date})
     res = res.dropna()
     res.to_csv('./trades/%s_%s_%s.csv' % (strat, otype, lags))
