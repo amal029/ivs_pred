@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import shutil
 import keras
 import pred
 import numpy as np
@@ -18,7 +19,10 @@ from pred import NS
 from pred import CT
 from pred import SSVI
 from scipy import stats
-from blackscholes import BlackScholesCall, BlackScholesPut
+# from blackscholes import BlackScholesCall, BlackScholesPut
+
+# For plotting style
+import scienceplots
 
 
 def date_to_num(otype, date, dd='./figs'):
@@ -231,9 +235,9 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
     MS = valY.shape[1]
     TS = valY.shape[2]
     # XXX: Moneyness
-    MONEYNESS = [0, MS//2, MS-1]
+    MONEYNESS = [0, 43, 1, 44, 1, 55]
     # XXX: Some terms
-    TERM = [0, TS//2, TS-1]
+    TERM = [29, 10, 49, 9, 71, 10]
 
     # XXX: Clean the data
     if dd == './gfigs':
@@ -297,7 +301,7 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                     if i in MONEYNESS and j in TERM:
                         fig, ax = plt.subplots()
                         xaxis = ['t-%s' % (i+1) for i in (range(TSTEPS))[::-1]]
-                        xaxis.append(r'$\mu$')
+                        xaxis.append(r'$m$')
                         xaxis.append(r'$\tau$')
                         ax.bar(xaxis, m1.coef_, color='b')
                         ax.set_ylabel('Coefficient magnitudes')
@@ -346,7 +350,9 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                          for i in range(pred.LT, pred.UT+pred.TSTEP,
                                         pred.TSTEP)]
                     labels = ['t-%s' % (i+1) for i in range(TSTEPS)[::-1]]
-                    markers = [(3+i, 1, 0) for i in range(TSTEPS)]
+                    import itertools
+                    markers = itertools.cycle(('o', '+', '*', 'x', 'p'))
+                    # markers = [(3+i, 1, 0) for i in range(TSTEPS)]
                     for mts in TERM:
                         # XXX: The term structure weights
                         ws = m1.coef_[mts][:-1].reshape(TSTEPS, TS)
@@ -357,7 +363,7 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                         # XXX: Now just plot the 2d curves
                         fig, ax = plt.subplots()
                         for i in range(TSTEPS):
-                            ax.plot(X, ws[i], marker=markers[i],
+                            ax.plot(X, ws[i], marker=next(markers),
                                     label=labels[i], markevery=0.1)
                         ax.set_ylabel('Coefficient magnitudes')
                         ax.set_xlabel('Term structure')
@@ -371,7 +377,7 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         if not plot:
             out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
-    elif (model == 'mskautoencoder' or model == 'mskpca' or model == 'mskhar'
+    elif (model == 'mskpca' or model == 'mskhar'
           or model == 'mskvae' or model == 'mskenethar' or
           model == 'msklassohar'
           or model == 'mskenetpca' or model == 'msklassopca' or
@@ -405,22 +411,24 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             mskew = mskew.reshape(mskew.shape[0],
                                   mskew.shape[1]*mskew.shape[2])
 
-            # Extract features before prediction
-            mskew = extract_features(mskew, model_name, dd, TSTEPS,
-                                     feature_res, m=t, type='mskew',
-                                     otype=otype)
+            # # Extract features before prediction
+            # mskew = extract_features(mskew, model_name, dd, TSTEPS,
+            #                          feature_res, m=t, type='mskew',
+            #                          otype=otype)
 
             # XXX: Add t to the sample set
             ts = np.array([t]*mskew.shape[0]).reshape(mskew.shape[0], 1)
             mskew = np.append(mskew, ts, axis=1)
 
-            out[:, :, j] = m1.predict(mskew)
+            out[:, :, j] = m1.predict(mskew, TSTEPS, 'skew')
 
             if get_features and model != 'mskvae':
                 if j in TERM:
                     X = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
                     labels = ['t-%s' % (i+1) for i in range(feature_res)[::-1]]
-                    markers = [(3+i, 1, 0) for i in range(feature_res)]
+                    import itertools
+                    markers = itertools.cycle(('o', '+', '*')) 
+                    # markers = [(3+i, 1, 0) for i in range(feature_res)]
                     for mts in MONEYNESS:
                         # XXX: The term structure weights
                         ws = m1.coef_[mts][:-1].reshape(feature_res, MS)
@@ -431,7 +439,7 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                         # XXX: Now just plot the 2d curves
                         fig, ax = plt.subplots()
                         for i in range(feature_res):
-                            ax.plot(X, ws[i], marker=markers[i],
+                            ax.plot(X, ws[i], marker=next(markers),
                                     label=labels[i], markevery=0.1)
                         ax.set_ylabel('Coefficient magnitudes')
                         ax.set_xlabel('Moneyness')
@@ -445,7 +453,7 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
 
-    elif (model == 'tskautoencoder' or model == 'tskpca' or
+    elif (model == 'tskpca' or
           model == 'tskhar' or
           model == 'tskvae'
           or model == 'tskenethar' or
@@ -478,17 +486,17 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             tskew = tskew.reshape(tskew.shape[0],
                                   tskew.shape[1]*tskew.shape[2])
 
-            # Extract features before prediction
-            tskew = extract_features(tskew, model_name, dd, TSTEPS,
-                                     feature_res,
-                                     m=m, type='tskew', otype=otype)
+            # # Extract features before prediction
+            # tskew = extract_features(tskew, model_name, dd, TSTEPS,
+            #                          feature_res,
+            #                          m=m, type='tskew', otype=otype)
 
             # XXX: Add m to the sample set
             ms = np.array([m]*tskew.shape[0]).reshape(tskew.shape[0], 1)
             tskew = np.append(tskew, ms, axis=1)
 
             # XXX: Predict the output
-            out[:, j] = m1.predict(tskew)
+            out[:, j] = m1.predict(tskew, TSTEPS, 'skew')
 
             # XXX: Features plot
             if get_features and model != 'tskvae':
@@ -497,7 +505,10 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                          for i in range(pred.LT, pred.UT+pred.TSTEP,
                                         pred.TSTEP)]
                     labels = ['t-%s' % (i+1) for i in range(feature_res)[::-1]]
-                    markers = [(3+i, 1, 0) for i in range(feature_res)]
+                    import itertools
+                    markers = itertools.cycle(('o', '+', '*', 'x', 'p', '.', '>',
+                                               '1', '2', '3', '4', 'd', 's', '<'))
+                    # markers = [(3+i, 1, 0) for i in range(feature_res)]
                     for mts in TERM:
                         # XXX: The term structure weights
                         ws = m1.coef_[mts][:-1].reshape(feature_res, TS)
@@ -508,7 +519,7 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                         # XXX: Now just plot the 2d curves
                         fig, ax = plt.subplots()
                         for i in range(feature_res):
-                            ax.plot(X, ws[i], marker=markers[i],
+                            ax.plot(X, ws[i], marker=next(markers),
                                     label=labels[i], markevery=0.1)
                         ax.set_ylabel('Coefficient magnitudes')
                         ax.set_xlabel('Term structure')
@@ -523,7 +534,7 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             out = out.reshape(out.shape[0], out.shape[1]*out.shape[2])
             valY = valY.reshape(valY.shape[0], valY.shape[1]*valY.shape[2])
 
-    elif (model == 'pmautoencoder' or model == 'pmhar' or model == 'pmpca' or
+    elif (model == 'pmhar' or model == 'pmpca' or
           model == 'pmvae'
           or model == 'pmenethar' or model == 'pmlassohar' or
           model == 'pmenetpca' or model == 'pmlassopca'
@@ -559,17 +570,16 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                 # XXX: Now make the prediction
                 val_vec = valX[:, :, i, j]
 
-                # XXX: Extract features before prediction
-                val_vec = extract_features(val_vec, model_name, dd, TSTEPS,
-                                           feature_res, m=s, t=t,
-                                           type='point', otype=otype)
+                # # XXX: Extract features before prediction
+                # val_vec = extract_features(val_vec, model_name, dd, TSTEPS,
+                #                            feature_res, m=s, t=t,
+                #                            type='point', otype=otype)
 
                 # XXX: Add t to the sample set
-                k = np.array([s, t]*val_vec.shape[0]).reshape(val_vec.shape[0],
-                                                              2)
+                k = np.array([s, t]*val_vec.shape[0]).reshape(val_vec.shape[0], 2)
                 val_vec = np.append(val_vec, k, axis=1)
 
-                out[:, i, j] = m1.predict(val_vec)
+                out[:, i, j] = m1.predict(val_vec, TSTEPS, 'point')
 
                 # XXX: Feature vector plot
                 if get_features and model != 'pmvae':
@@ -682,8 +692,8 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             m1 = pickle.load(input_file)
 
         # XXX: Get the feature importances
-        if get_features and model == 'vaesurf':
-            ws = m1.coef_.reshape(MS, TS, TSTEPS, MS, TS)
+        if get_features and model != 'vaesurf':
+            ws = m1.coef_.reshape(MS, TS, feature_res, MS, TS)
             # XXX: Just get the top 10 results
             X = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
             Y = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
@@ -699,12 +709,12 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                             model, X[i], Y[j], TSTEPS, otype)
                     plot_hmap_features(wsurf, X, Y, name)
 
-        # Extract features before prediction
-        valX = extract_features(valX, model, dd, TSTEPS, feature_res,
-                                type='surf', otype=otype)
+        # # Extract features before prediction
+        # valX = extract_features(valX, model, dd, TSTEPS, feature_res,
+        #                         type='surf', otype=otype)
 
         # XXX: Predict the output
-        out = m1.predict(valX)
+        out = m1.predict(valX, TSTEPS, 'surf')
         if plot:
             # XXX: Reshape the data for plotting
             out = out.reshape(out.shape[0], MS, TS)
@@ -866,7 +876,7 @@ def rmse_r2_time_series(fname, ax1, ax2, mm, m1, em, bottom):
         # XXX: Get the y and yp that are true
         yi = y[h]
         ypi = yp[h]
-        r2sc[i] = r2_score(yi, ypi)
+        r2sc[i] = r2_score(yi, ypi)*100
     # XXX: Clean it up to have a min value of 0
     r2sc = [0 if i < 0 else i for i in r2sc]
 
@@ -925,13 +935,13 @@ def overall(fname):
     rmses = root_mean_squared_error(np.transpose(y), np.transpose(yp),
                                     multioutput='raw_values')
     # mapes = mean_absolute_percentage_error(y, yp, multioutput='raw_values')
-    r2sc = r2_score(y, yp, multioutput='raw_values')
+    r2sc = r2_score(y, yp, multioutput='raw_values')*100
 
     return np.mean(rmses), np.std(rmses), np.mean(r2sc), np.std(r2sc)
 
 
 def model_v_model(otype):
-    TTS = [20]
+    TTS = [5, 10, 20]
     models = [
         # r'ctridge', r'ctlasso', r'ctenet',
         # r'ssviridge', r'ssvilasso', r'ssvienet',
@@ -946,20 +956,33 @@ def model_v_model(otype):
         # 'mskridge', 'tskridge',
         # 'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
         # 'tskplsenet'
-        'har', 'lassohar', 'enethar',
-        'pmhar', 'pmlassohar', 'pmenethar',
-        'tskhar', 'tsklassohar', 'tskenethar',
-        'mskhar', 'msklassohar', 'mskenethar'
+        # 'har', 'lassohar', 'enethar',
+        # 'pmhar', 'pmlassohar', 'pmenethar',
+        # 'tskhar', 'tsklassohar', 'tskenethar',
+        # 'mskhar', 'msklassohar', 'mskenethar'
+        'vae', 'mskvae', 'tskvae',
+        'lassovae', 'msklassovae', 'tsklassovae',
+        'enetvae', 'mskenetvae', 'tskenetvae',
+        'pca', 'mskpca', 'tskpca', 'pmpca'
+        'lassopca', 'msklassopca', 'tsklassopca', 'pmlassopca',
+        'enetpca', 'mskenetpca', 'tskenetpca', 'pmenetpca',
+        # 'har', 
+        # 'mskhar', 
+        # 'pmridge', 
+        # 'tskridge'
     ]
     fp = {t: np.array([0.0]*len(models)*len(models)).reshape(len(models),
                                                              len(models))
           for t in TTS}
 
-    for dd in ['./figs', './gfigs']:
+    for dd in ['./figs']:
         for t in fp.keys():
             for i in range(len(models)):
+                if models[i][-3:] == 'har':
+                    feature_res = 3
                 dates, y, o = main(otype, plot=False, TSTEPS=t,
                                    model=models[i],
+                                #    feature_res=feature_res,
                                    get_features=False,
                                    dd=dd)
                 # XXX: Save all the results
@@ -973,8 +996,8 @@ def model_v_model(otype):
 
 
 def call_dmtest(otype, mmodel, models):
-    TTS = [10, 20, 5]
-    # models = ['ssviridge', 'lasso', 'enet', 'plsridge', 'plslasso',
+    TTS = [5]
+    #models = ['ssviridge', 'lasso', 'enet', 'plsridge', 'plslasso',
     # 'plsenet',
     #           'pmlasso', 'pmenet', 'pmplsridge', 'pmplslasso',
     #           'pmplsenet', 'msklasso', 'mskenet', 'mskplsridge',
@@ -999,7 +1022,7 @@ def call_dmtest(otype, mmodel, models):
                                                               len(models))
            for t in TTS}
 
-    for dd in ['figs', 'gfigs']:
+    for dd in ['figs']:
         for ts in TTS:
             # XXX: Moved the cache inside to reduce memory consumption
             cache = {i: {j: {k: None for k in models} for j in TTS}
@@ -1007,13 +1030,13 @@ def call_dmtest(otype, mmodel, models):
             # fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, sharex=True)
             for i in range(len(models)-1):
 
-                # XXX: modification for HAR
-                # Only do har for tstep 20
-                if models[i][-3:] == 'har' and ts != 20:
-                    continue
+                # XXX: Modification for 20-lag HAR
+                tstep = ts
+                if models[i][-3:] == 'har':
+                    tstep = 20
 
                 name1 = ('./final_results/%s_%s_ts_%s_model_%s.npy.gz' %
-                         (otype, dd, ts, models[i]))
+                         (otype, dd, tstep, models[i]))
                 print('Doing %d: %s' % (i, name1))
                 if cache[dd][ts][models[i]] is None:
                     y, yp = getpreds(name1)
@@ -1022,13 +1045,14 @@ def call_dmtest(otype, mmodel, models):
                     y, yp = cache[dd][ts][models[i]]
                 for j in range(i+1, len(models)):
 
-                    # XXX: Modifications for HAR
-                    if models[j][-3:] == 'har' and ts != 20:
-                        continue
+                    # XXX: Modification for 20-lag HAR
+                    tstep = ts
+                    if models[j][-3:] == 'har':
+                        tstep = 20
 
                     # XXX: Do only the best ones
                     name2 = ('./final_results/%s_%s_ts_%s_model_%s.npy.gz' %
-                             (otype, dd, ts, models[j]))
+                             (otype, dd, tstep, models[j]))
                     print('Doing %d: %s' % (j, name2))
                     if cache[dd][ts][models[j]] is None:
                         yk, ypk = getpreds(name2)
@@ -1048,7 +1072,19 @@ def call_dmtest(otype, mmodel, models):
                         ypk[mask] = np.interp(np.flatnonzero(mask),
                                               np.flatnonzero(~mask),
                                               ypk[~mask])
-                    assert (np.array_equal(y, yk))
+                                            
+                    # XXX: Modifications for 20-lag HAR
+                    # remove first few values
+                    if not np.array_equal(y.shape, yk.shape):
+                        print('Shapes not equal: ', y.shape, yp.shape, yk.shape, ypk.shape)
+                        if y.shape[1] > yk.shape[1]:
+                            y = y[:, -yk.shape[1]:]
+                            yp = yp[:, -yk.shape[1]:]
+                        else:
+                            yk = yk[:, -y.shape[1]:]
+                            ypk = ypk[:, -y.shape[1]:]
+
+                    # assert (np.array_equal(y, yk))
                     # XXX: Now we can do Diebold mariano test
                     try:
                         dstat, pval = dmtest.dm_test(y, yk, yp, ypk)
@@ -1081,17 +1117,23 @@ def call_dmtest(otype, mmodel, models):
 def call_timeseries(otype):
     # XXX: This is many models vs many other models
     # model_v_model()
-    models = ['pmridge', 'ridge', 'tskridge', 'mskridge']
+    lmodels = ['Point-SAM', 'Skew-HAR', 'TS-Ridge', 'Surface-HAR']
+    models = ['pmridge', 'mskhar' , 'tskridge', 'har']
     m1 = ['*', 'P', 'd', '8']
-    for dd in ['figs', 'gfigs']:
-        for ts in [5, 10, 20]:
+    for dd in ['figs']:
+        for ts in [5]:
             fig1, ax1 = plt.subplots(nrows=1, ncols=1)
             fig2, ax2 = plt.subplots(nrows=1, ncols=1)
             bottom = [0]*9
             for i, model in enumerate(models):
+                # XXX: Modification for 20-lag HAR
+                tstep = ts
+                if model[-3:] == 'har':
+                    tstep = 20
+
                 # XXX: Do only the best ones
                 name = './final_results/%s_%s_ts_%s_model_%s.npy.gz' % (
-                    otype, dd, ts, model)
+                    otype, dd, tstep, model)
                 dates, bottom = rmse_r2_time_series(name, ax1, ax2,
                                                     model, m1[i],
                                                     em=0.999,
@@ -1104,9 +1146,9 @@ def call_timeseries(otype):
             ax1.set_ylabel('RMSE (avg)')
             ax2.set_ylabel(r'$R^2$ (avg)')
             ax2.yaxis.set_ticklabels([])
-            ax1.legend(ncol=4, loc='upper center', bbox_to_anchor=(0.5, 1.05),
+            ax1.legend(lmodels, ncol=4, loc='upper center', bbox_to_anchor=(0.5, 1.05),
                        fancybox=True, shadow=True)
-            ax2.legend(ncol=4, loc='upper center', bbox_to_anchor=(0.5, 1.05),
+            ax2.legend(lmodels, ncol=4, loc='upper center', bbox_to_anchor=(0.5, 1.05),
                        fancybox=True, shadow=True)
             plt.xticks(fontsize=9, rotation=40)
             fig1.savefig('./plots/%s_%s_rmse_time_series_best_models_%s.pdf'
@@ -1120,39 +1162,53 @@ def call_timeseries(otype):
 def call_overall(otype):
     # XXX: Now plot the overall RMSE, MAPE, and R2 for all models
     # average across all results.
-    TTS = [10, 20, 5]
-    lmodels = ['ssviridge', 'ctridge', 'ctlasso', 'ctenet',
-               'ssvilasso', 'ssvienet',
-               'sridge', 'slasso', 'senet',
-               'splsridge', 'splslasso', 'splsenet',
-               'pmridge', 'pmlasso',
-               'pmenet', 'pmplsridge', 'pmplslasso', 'pmplsenet',
-               'mskridge', 'msklasso', 'mskenet', 'mskplsridge', 'mskplslasso',
-               'mskplsenet', 'msknsridge', 'msknslasso', 'msknsenet',
-               'tskridge', 'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
-               'tskplsenet', 'tsknsridge', 'tsknslasso', 'tsknsenet']
-    models = ['ssviridge', 'ctridge', 'ctlasso', 'ctenet',
-              'ssvilasso', 'ssvienet',
-              'ridge', 'lasso', 'enet', 'plsridge', 'plslasso', 'plsenet',
-              'pmridge', 'pmlasso',
-              'pmenet', 'pmplsridge', 'pmplslasso', 'pmplsenet',
-              'mskridge', 'msklasso', 'mskenet', 'mskplsridge', 'mskplslasso',
-              'mskplsenet', 'msknsridge', 'msknslasso', 'msknsenet',
-              'tskridge', 'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
-              'tskplsenet', 'tsknsridge', 'tsknslasso', 'tsknsenet']
-
+    TTS = [5, 10, 20]
+    # lmodels = ['ssviridge', 'ctridge', 'ctlasso', 'ctenet',
+    #            'ssvilasso', 'ssvienet',
+    #            'sridge', 'slasso', 'senet',
+    #            'splsridge', 'splslasso', 'splsenet',
+    #            'pmridge', 'pmlasso',
+    #            'pmenet', 'pmplsridge', 'pmplslasso', 'pmplsenet',
+    #            'mskridge', 'msklasso', 'mskenet', 'mskplsridge', 'mskplslasso',
+    #            'mskplsenet', 'msknsridge', 'msknslasso', 'msknsenet',
+    #            'tskridge', 'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
+    #            'tskplsenet', 'tsknsridge', 'tsknslasso', 'tsknsenet']
+    # models = ['ssviridge', 'ctridge', 'ctlasso', 'ctenet',
+    #           'ssvilasso', 'ssvienet',
+    #           'ridge', 'lasso', 'enet', 'plsridge', 'plslasso', 'plsenet',
+    #           'pmridge', 'pmlasso',
+    #           'pmenet', 'pmplsridge', 'pmplslasso', 'pmplsenet',
+    #           'mskridge', 'msklasso', 'mskenet', 'mskplsridge', 'mskplslasso',
+    #           'mskplsenet', 'msknsridge', 'msknslasso', 'msknsenet',
+    #           'tskridge', 'tsklasso', 'tskenet', 'tskplsridge', 'tskplslasso',
+    #           'tskplsenet', 'tsknsridge', 'tsknslasso', 'tsknsenet']
+    lmodels = ['Point-SAM', 'MS-HAR' , 'TS-Ridge', 'Surface-HAR']
+    models = ['pmridge', 'mskhar', 'tskridge', 'har']
+    ylabels = ['RMSE', 'RMSE (std)', r'$R^2$ (%)', r'$R^2$ (std)']
+ 
     # XXX: Do the overall RMSE, MAPE, and R2
-    for dd in ['figs', 'gfigs']:
-        for ts in TTS:
+    for dd in ['figs']:
+        data = {key: {
+            'Lags 5': [],
+            'Lags 10': [],
+            'Lags 20': []
+        } for key in ['rmse', 'rmsestd', 'r2', 'r2std']}
+
+        for i, model in enumerate(models):
             rmsemeans = []
             # mapemeans = []
             r2means = []
             rmsestds = []
             # mapestds = []
             r2stds = []
-            for i, model in enumerate(models):
+            for ts in TTS:
+                # XXX: Modification for 20-lag HAR
+                tstep = ts
+                if model[-3:] == 'har':
+                    tstep = 20
+
                 name = './final_results/%s_%s_ts_%s_model_%s.npy.gz' % (
-                    otype, dd, ts, model)
+                    otype, dd, tstep, model)
                 print('Doing model: %s' % name)
                 rmsem, rmsestd, r2m, r2std = overall(name)
                 # XXX: MEAN
@@ -1163,11 +1219,45 @@ def call_overall(otype):
                 rmsestds.append(rmsestd)
                 # mapestds.append(mapestd)
                 r2stds.append(r2std)
-            df = pd.DataFrame({'models': lmodels, 'rmse': rmsemeans,
-                               'rmsestd': rmsestds, 'r2:': r2means,
-                               'r2std': r2stds})
-            df.to_csv('./plots/%s_%s_rmse_r2_avg_std_models_%s.csv'
-                      % (otype, dd, ts))
+
+                data['rmse']['Lags %d' % ts].append(rmsem)
+                # data['mape']['Lags %d' % ts].append(mapesm)
+                data['r2']['Lags %d' % ts].append(r2m)
+                data['rmsestd']['Lags %d' % ts].append(rmsestd)
+                # data['mapestd']['Lags %d' % ts].append(mapestd)
+                data['r2std']['Lags %d' % ts].append(r2std)
+
+            # Plot grouped bar chat for RMSE and R2
+
+            
+            # df = pd.DataFrame({'models': lmodels, 'rmse': rmsemeans,
+            #                    'rmsestd': rmsestds, 'r2:': r2means,
+            #                    'r2std': r2stds})
+            # df.to_csv('./plots/%s_%s_rmse_r2_avg_std_models_%s.csv'
+            #           % (otype, dd, ts))
+        i = 0
+        for measurement, _ in data.items():
+
+            fig, ax = plt.subplots(nrows=1, ncols=1)
+            x = np.arange(len(lmodels))
+            width = 0.25
+            multiplier = 0
+
+            for key, value in data[measurement].items():
+                offset = width * multiplier
+                ax.bar(x + offset, value, width, label=key)
+                multiplier += 1
+            
+            # ax.set_title('Total absolute %s for best models' % data[i])
+            ax.set_xticks(x + width, lmodels)
+            ax.legend(loc='upper left', ncols=4)
+            # set y-label horizontally
+            ax.set_ylabel('%s' % ylabels[i])
+            # Set y-limit
+            ax.set_ylim(0, np.max([np.max(data[measurement][key]) for key in data[measurement].keys()])*1.5)
+
+            fig.savefig('./plots/%s_%s_%s_avg_models.pdf' % (otype, dd, measurement))
+            i += 1
 
 
 def moneyness_term(fname, m, mi, t, tn, df, df2, y=None, yp=None):
@@ -1211,8 +1301,8 @@ def moneyness_term(fname, m, mi, t, tn, df, df2, y=None, yp=None):
 
 def r2_rmse_score_mt(otype, models=['pmridge', 'tskridge']):
     assert (len(models) == 2)
-    TS = [20, 10, 5]
-    dds = ['figs', 'gfigs']
+    TS = [5]
+    dds = ['figs']
     mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
     # XXX: Now go through the TS
     tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
@@ -1235,10 +1325,19 @@ def r2_rmse_score_mt(otype, models=['pmridge', 'tskridge']):
             # for i, model in enumerate(models):
             model1 = models[0]
             model2 = models[1]
+            # XXX: Modification for 20-lag HAR
+            tstep1 = ts
+            tstep2 = ts
+            if model1[-3:] == 'har':
+                tstep1 = 20
+            
+            if model2[-3:] == 'har':
+                tstep2 = 20
+            
             name1 = './final_results/%s_%s_ts_%s_model_%s.npy.gz' % (
-                otype, dd, ts, model1)
+                otype, dd, tstep1, model1)
             name2 = './final_results/%s_%s_ts_%s_model_%s.npy.gz' % (
-                otype, dd, ts, model2)
+                otype, dd, tstep2, model2)
             # XXX: Make the different square matrices
             df1 = pd.DataFrame({'m': ['itm', 'atm', 'otm'],
                                 'st': [np.nan]*3, 'mt': [np.nan]*3,
@@ -1276,7 +1375,18 @@ def r2_rmse_score_mt(otype, models=['pmridge', 'tskridge']):
                     y2, yp2 = moneyness_term(name2, m, mi, t, tn, df3, df4,
                                              y2, yp2)
                     # XXX: Perform Diebold mariano test for yp1 and yp2
-                    assert (np.array_equal(y1, y2))
+                    # assert (np.array_equal(y1, y2))
+                    print(y1.shape, yp1.shape, y2.shape, yp2.shape)
+                    # XXX: Modifications for 20-lag HAR
+                    if not np.array_equal(y1.shape, y2.shape):
+                        print('Shapes not equal: ', y1.shape, yp1.shape, y2.shape, yp2.shape)
+                        if y1.shape[0] > y2.shape[0]:
+                            y1 = y1[-y2.shape[0]:, :]
+                            yp1 = yp1[-y2.shape[0]:, :]
+                        else:
+                            y2 = y2[-y1.shape[0]:, :]
+                            yp2 = yp2[-y1.shape[0]:, :]
+                    print(y1.shape, yp1.shape, y2.shape, yp2.shape)
                     yr = y1[:, m[0]:m[1], t[0]:t[1]]
                     yr2 = y2[:, m[0]:m[1], t[0]:t[1]]
                     ypr1 = yp1[:, m[0]:m[1], t[0]:t[1]]
@@ -1335,18 +1445,23 @@ def pttest(y, yhat):
     return pyz, pt, pval
 
 
-def direction(otype, models=['tskridge', 'pmridge']):
+def direction(otype, models=['tskridge', 'mskhar']):
     mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
     # XXX: Now go through the TS
     tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
                                       pred.TSTEP)]
     MS = len(mms)
     TS = len(tts)
-    for dd in ['figs', 'gfigs']:
-        for ts in [20, 10, 5]:
+    for dd in ['figs']:
+        for ts in [5]:
             for i, model in enumerate(models):
+                # XXX: Modification for 20-lag HAR
+                tstep = ts
+                if model[-3:] == 'har':
+                    tstep = 20
+
                 name = './final_results/%s_%s_ts_%s_model_%s.npy.gz' % (
-                    otype, dd, ts, model)
+                    otype, dd, tstep, model)
                 print('Doing model: %s' % name)
                 data = blosc2.load_array(name)
                 y = data[:, 1:MS*TS+1].astype(float, copy=False)
@@ -1361,27 +1476,50 @@ def direction(otype, models=['tskridge', 'pmridge']):
                 pyz = np.array(pyz).reshape(MS, TS)
                 res = np.array(res).reshape(MS, TS)
 
-                fig, (axp, ax) = plt.subplots(nrows=2, ncols=1, sharex=True)
+                # fig, (axp, ax) = plt.subplots(nrows=1, ncols=1, sharex=True)
+                fig, axp = plt.subplots(nrows=1, ncols=1, sharex=True)
 
                 imp = axp.imshow(pyz, cmap='Greys')
-                im = ax.imshow(res, cmap='binary')
+                # im = ax.imshow(res, cmap='binary')
 
-                axp.set_ylabel('Moneyness', fontsize=16)
+                axp.set_xlabel('Term structure', fontsize=12)
+                axp.set_ylabel('Moneyness', fontsize=12)
                 axp.set_yticks([0, MS-1], labels=['%0.2f' % mms[0],
                                                   '%0.2f' % mms[-1]],
-                               fontsize=16)
+                               fontsize=10)
+                axp.set_xticks([0, TS-1], labels=['%0.2f' % tts[0],
+                                                    '%0.2f' % tts[-1]],
+                                 fontsize=10)
                 fig.colorbar(imp, orientation='vertical', ax=axp)
 
-                ax.set_xlabel('Term structure', fontsize=16)
+                # ax.set_xlabel('Term structure', fontsize=16)
                 # ax.set_ylabel('Moneyness', fontsize=16)
-                ax.set_yticks([])
-                # ax.set_yticks([0, MS-2], labels=['%0.2f' % mms[0],
+                # ax.set_yticks([])
+                # ax.set_yticks([0, MS-1], labels=['%0.2f' % mms[0],
                 #                                  '%0.2f' % mms[-2]],
                 #               fontsize=16)
-                ax.set_xticks([0, TS-1], labels=['%0.2f' % tts[0],
-                                                 '%0.2f' % tts[-1]],
-                              fontsize=16)
-                fig.colorbar(im, orientation='vertical', ax=ax)
+                # ax.set_xticks([0, TS-1], labels=['%0.2f' % tts[0],
+                #                                  '%0.2f' % tts[-1]],
+                #               fontsize=16)
+                # fig.colorbar(im, orientation='vertical', ax=ax)
+
+                print('For model: %s' % model)
+                # # Get the index of the max and min pyz values
+                idx = np.unravel_index(np.argmax(pyz, axis=None), pyz.shape)
+                # print('Max: %0.5f at %0.5f, %0.5f' % (pyz[idx], mms[idx[0]], tts[idx[1]]))
+                print('Max: Co-or: ', idx)
+                max_file = ('%s_m_%s_t_%s_lags_%s_call_figs.pdf' % (model, mms[idx[0]], tts[idx[1]], tstep))
+                # print('Max: ', max_file)
+                idx = np.unravel_index(np.argmin(pyz, axis=None), pyz.shape)
+                # print('Min: %0.5f at %0.5f, %0.5f' % (pyz[idx], mms[idx[0]], tts[idx[1]]))
+                print('Min: Co-or: ', idx)
+                min_file = ('%s_m_%s_t_%s_lags_%s_call_figs.pdf' % (model, mms[idx[0]], tts[idx[1]], tstep))
+                # print('Min: ', min_file)
+
+                # Copy min and max files to ../feature_paper/figs/
+                shutil.copyfile('./plots/%s' % max_file, '../feature_paper/figs/%s_max_lags_%s_call_figs.pdf' % (model, tstep))
+                shutil.copyfile('./plots/%s' % min_file, '../feature_paper/figs/%s_min_lags_%s_call_figs.pdf' % (model, tstep))
+
 
                 plt.savefig('./plots/dir_score_pval_%s_%s_ts_%s_model_%s.pdf' %
                             (otype, dd, ts, model), bbox_inches='tight')
@@ -1410,14 +1548,14 @@ def lag_test(otype):
         return y[start:], yp[start:]
 
     TTS = [20, 10, 5]
-    models = ['tskridge', 'pmridge']
-    dds = ['figs', 'gfigs']
+    models = ['pmridge', 'tskridge']
+    dds = ['figs']
     for dd in dds:
         for i, model in enumerate(models):
-            dstatf = {i: [] for i in TTS[:-1]}
-            dstatpf = {i: [] for i in TTS[:-1]}
-            r2f = {i: [] for i in TTS[:-1]}
-            r2pf = {i: [] for i in TTS[:-1]}
+            dstatf = np.array([0.0]*len(TTS)*len(TTS)).reshape(len(TTS), len(TTS))
+            dstatpf = np.array([0.0]*len(TTS)*len(TTS)).reshape(len(TTS), len(TTS))
+            r2f = np.array([0.0]*len(TTS)*len(TTS)).reshape(len(TTS), len(TTS))
+            r2pf = np.array([0.0]*len(TTS)*len(TTS)).reshape(len(TTS), len(TTS))
 
             for i, ts in enumerate(TTS[:-1]):
                 name = './final_results/%s_%s_ts_%s_model_%s.npy.gz' % (
@@ -1426,7 +1564,9 @@ def lag_test(otype):
                 # XXX: Get the date first
                 dt = load(name, get_date=True)
                 y1, yp1 = load(name, dt=dt)
-                for j in TTS[i+1:]:
+                for j in range(i+1, len(TTS)):
+                    name = './final_results/%s_%s_ts_%s_model_%s.npy.gz' % (
+                        otype, dd, TTS[j], model)
                     y2, yp2 = load(name, dt=dt)
                     assert (np.array_equal(y1, y2))
                     try:
@@ -1436,13 +1576,28 @@ def lag_test(otype):
                     rval = cr2_score(y1, y2, yp1, yp2)
                     rpval = cr2_score_pval(y1, y2, yp1, yp2, greater=False)
                     # XXX: Append to the dict list
-                    dstatf[ts].append(dstat)
-                    dstatpf[ts].append(pval)
-                    r2f[ts].append(rval)
-                    r2pf[ts].append(rpval)
+                    dstatf[i][j] = dstat
+                    dstatpf[i][j] = pval
+                    r2f[i][j] = rval
+                    r2pf[i][j] = rpval
+            header = ','.join([str(i) for i in TTS[:]])
 
-            print(model, ' DM:', dstatf, dstatpf)
-            print(model, r' R^2: ', r2f, r2pf)
+            np.savetxt('./plots/lag_dstat_%s_%s_%s.csv' % (otype, dd, model),
+                       dstatf, delimiter=',',
+                       header=header)
+            np.savetxt('./plots/lag_dstat_pval_%s_%s_%s.csv' % (otype, dd,
+                                                               model),
+                       dstatpf, delimiter=',',
+                       header=header)
+            np.savetxt('./plots/lag_r2_%s_%s_%s.csv' % (otype, dd, model),
+                       r2f, delimiter=',',
+                       header=header)
+            np.savetxt('./plots/lag_r2_pval_%s_%s_%s.csv' % (otype, dd, model),
+                       r2pf, delimiter=',',
+                       header=header)
+            
+            # print(model, ' DM:', dstatf, dstatpf)
+            # print(model, r' R^2: ', r2f, r2pf)
 
 
 def trade(dates, y, yp, otype, strat, eps=0.05, lags=5):
@@ -1811,8 +1966,8 @@ if __name__ == '__main__':
     plt.style.use('seaborn-v0_8-whitegrid')
 
     # XXX: model vs model
-    # for otype in ['call', 'put']:
-    #    model_v_model(otype)
+    for otype in ['call']:
+       model_v_model(otype)
 
     # XXX: Point ridge models -- Peter add other models here
     # point_ridge = {'point_ridge': ['pmridge','pmpca', 'pmplsridge', 'pmhar',
@@ -1849,56 +2004,228 @@ if __name__ == '__main__':
     # surf_enet = {'surf_enet': ['enet', 'enetpca', 'plsenet', 'ctenet',
     # 'ssvienet', 'enethar', 'enetvae']}
 
-    # # for otype in ['call', 'put']:
-    #      # XXX: Plot the bar graph for overall results
-    # #     call_overall(otype)
-    #      # XXX: Plot the best time series RMSE and MAPE
-    # #     call_timeseries(otype)
+    # XXX: Best models for each regressor
+    # point = {'point_all': ['pmridge', 'pmplslasso', 'pmplsenet']}
+    # skew = {'skew_all': ['mskhar', 'mskplslasso', 'mskplsenet']}
+    # ts = {'termstructure_all': ['tskridge', 'tskplslasso', 'tskplsenet']}
+    # surf = {'surf_all': ['har', 'plslasso', 'plsenet']}
 
-    # for otype in ['call', 'put']:
-    #     # XXX: Plot the bar graph for overall results
+    # XXX: Best models for each feature
+    models = {'best': ['pmridge', 'mskhar', 'tskridge', 'har']}
+
+
+    # for otype in ['call']:
+    # # #     #  XXX: Plot the bar graph for overall results
     #     call_overall(otype)
-    #     # XXX: Plot the best time series RMSE and MAPE
-    #     call_timeseries(otype)
+    # #     #  XXX: Plot the best time series RMSE and MAPE
+        # call_timeseries(otype)
 
-    # for otype in ['call', 'put']:
-    #     for i in [surf_ridge, point_ridge, point_lasso, point_enet,
-    #               skew_ridge, skew_lasso, skew_enet,
-    #               ts_ridge, ts_lasso, ts_enet,
-    #               surf_lasso, surf_enet]:
-    #        # XXX: DM test across time (RMSE)
-    #         model, models = list(i.keys())[0], list(i.values())[0]
-    #         call_dmtest(otype, model, models)
+    # for otype in ['put']:
+    #     for i in [ models ]:
+    #         # XXX: DM test across time (RMSE)
+    #         model, model_names = list(i.keys())[0], list(i.values())[0]
+    #         call_dmtest(otype, model, model_names)
 
     # XXX: r2_score for moneyness and term structure
-    # for otype in ['call', 'put']:
-    #     r2_rmse_score_mt(otype)
+    # for otype in ['call']:
+    #     for i in range(len(models['best'])):
+    #         for j in range(i+1, len(models['best'])):
+                # r2_rmse_score_mt(otype, [models['best'][i], models['best'][j]])
 
-    # for otype in ['call', 'put']:
+    # for otype in ['call']:
     #     direction(otype)
+
+    # # XXX: Creating feature importance graphs for the best and worst directional accuracy
+    # for otype in ['put']:
+    #     bestAndWorst = direction(otype, models['best'])
+
+
 
     # XXX: This test compares different lag lengths for the same model,
     # usually there is literally no difference.
-    # for otype in ['call', 'put']:
+    # for otype in ['call']:
     #     lag_test(otype)
+    
+    # Copying over direction accuracy graphs
+    # for otype in ['put']:
+    #     for model in models['best']:
+    #         shutil.copyfile('./plots/dir_score_pval_%s_figs_ts_5_model_%s.pdf' % (otype, model), '../feature_paper/figs/dir_score_pval_%s_figs_ts_5_model_%s.pdf' % (otype, model))
 
-    # XXX: Generate latex table for dmtest rmse
+    # Copying over the timeseries and stacked bar graph
+    # shutil.copyfile('./plots/call_figs_r2_time_series_best_models_5.pdf', '../feature_paper/figs/call_figs_r2_time_series_best_models_5.pdf')
+    # shutil.copyfile('./plots/call_figs_rmse_time_series_best_models_5.pdf', '../feature_paper/figs/call_figs_rmse_time_series_best_models_5.pdf')
+
+    # # XXX: Generate latex table for best absolute r2 and rmse results
+    # # Copy over best absolute r2 and rmse graphs
+    # for otype in ['call']:
+    #     shutil.copyfile('./plots/%s_figs_r2_avg_models.pdf' % (otype), '../feature_paper/figs/best_abs_r2_%s.pdf' % (otype))
+    #     shutil.copyfile('./plots/%s_figs_r2std_avg_models.pdf' % (otype), '../feature_paper/figs/best_abs_r2std_%s.pdf' % (otype))
+    #     shutil.copyfile('./plots/%s_figs_rmse_avg_models.pdf' % (otype), '../feature_paper/figs/best_abs_rmse_%s.pdf' % (otype))
+    #     shutil.copyfile('./plots/%s_figs_rmsestd_avg_models.pdf' % (otype), '../feature_paper/figs/best_abs_rmsestd_%s.pdf' % (otype))
+    # # df = pd.read_csv('./plots/call_figs_rmse_r2_avg_std_models_5.csv')
+
+    # # columns = ['Index', 'Models', 'RMSE', 'RMSE STD', '$R^2$', '$R^2$ STD']
+    # # df.columns = columns
+
+    # # df.drop('Index', axis=1, inplace=True)
+
+    # # df['Models'] = ['Point', 'Skew', 'Term Structure', 'Surface']
+
+    # # df.set_index('Models', inplace=True)
+# # # Bold the max r2 and min rmse
+    # # def highlight_max(s):
+    # #     is_max = s == s.max()
+    # #     return ['font-weight: bold' if v else None for v in is_max]
+    
+    # # def highlight_min(s):
+    # #     is_min = s == s.min()
+    # #     return ['font-weight: bold' if v else None for v in is_min]
+    
+    # # s = df.style.apply(highlight_max, subset=['$R^2$'])
+    # # s = s.apply(highlight_min, subset=['RMSE'])
+
+    # # s.to_latex(buf='../feature_paper/figs/best/rmse_r2_avg_std_models_5.tex', column_format='l'*df.columns.size+'l', hrules=True, convert_css=True)
+
+    # XXX: Generate latex tables for best dmtest rmse and r2 
+    # for otype in ['put']:
+    #     for ts in [5]:
+    #         for dd in ['figs']:
+    #             df = pd.read_csv('./plots/dstat_%s_%s_%s_best_rmse.csv' % (
+    #                 otype, ts, dd))
+    #             dfp = pd.read_csv('./plots/pval_%s_%s_%s_best_rmse.csv' % (
+    #                 otype, ts, dd))
+                
+    #             dfr = pd.read_csv('./plots/r2cmp_%s_%s_%s_best.csv' % (
+    #                 otype, ts, dd))
+    #             dfrp = pd.read_csv('./plots/r2cmp_pval_%s_%s_%s_best.csv' % (
+    #                 otype, ts, dd))
+                
+                
+    #             # rename the column headers
+    #             columns = ['Point-SAM', 'Skew-HAR', '\\ac{TS}-SAM', 'Surface-HAR']
+    #             index = ['Point-SAM', 'Skew-HAR', '\\ac{TS}-SAM', 'Surface-HAR']
+
+    #             df.columns = columns
+    #             df.index = index
+    #             dfp.columns = columns
+    #             dfp.index = index
+
+    #             dfr.columns = columns
+    #             dfr.index = index
+    #             dfrp.columns = columns
+    #             dfrp.index = index
+
+    #             # Remove the surface index
+    #             df = df.drop('Surface-HAR', axis=0)
+    #             dfp = dfp.drop('Surface-HAR', axis=0)
+
+    #             dfr = dfr.drop('Surface-HAR', axis=0)
+    #             dfrp = dfrp.drop('Surface-HAR', axis=0)
+
+    #             # set the values past the diagonal to nan
+    #             for i in range(df.shape[0]):
+    #                 for j in range(df.shape[1]):
+    #                     if i >= j:
+    #                         df.iloc[i, j] = np.nan
+    #                         dfr.iloc[i, j] = np.nan
+
+    #             # Remove the Point column
+    #             df = df.drop('Point-SAM', axis=1)
+    #             dfp = dfp.drop('Point-SAM', axis=1)
+
+    #             dfr = dfr.drop('Point-SAM', axis=1)
+    #             dfrp = dfrp.drop('Point-SAM', axis=1)
+
+    #             # Map function to check if the corrisponding p-value is significant
+    #             # Bold insignificant values
+    #             def check_significance(x, xp):
+    #                 result = np.where(xp > 0.05 ,f"font-weight: bold;" , None)
+
+    #                 # if result.all():
+    #                 #     # set all values to None
+    #                 #     result = np.where(xp < 0.05, None, None)
+
+    #                 # # Set value to None if x is nan 
+    #                 # result = np.where(x != x, None, result)
+                    
+    #                 return result
+                
+    #             s = df.style.apply(check_significance, xp=dfp, axis=None)
+    #             sr = dfr.style.apply(check_significance, xp=dfrp, axis=None)
+
+    #             s.format('{:.1f}', na_rep=" ")
+    #             sr.format('{:.1f}', na_rep=" ")
+
+    #             # print(s.to_latex(column_format='l'*df.columns.size+'l', hrules=True, convert_css=True))
+    #             # print(sr.to_latex(column_format='l'*dfr.columns.size+'l', hrules=True, convert_css=True))
+
+    #             s.to_latex(buf='../feature_paper/figs/best/dstat-%s-%s-%s-best-rmse.tex' % (
+    #                 otype, ts, dd), column_format='l'*df.columns.size+'l', hrules=True, convert_css=True) 
+    #             sr.to_latex(buf='../feature_paper/figs/best/r2cmp-%s-%s-%s-best.tex' % (
+    #                 otype, ts, dd), column_format='l'*dfr.columns.size+'l', hrules=True, convert_css=True)
+
+                # for i in range(len(models['best'])):
+                #     for j in range(i+1, len(models['best'])):
+                #         for stat in ['r2_stat', 'rmse_dstat']:
+                #             df = pd.read_csv('./plots/mt_%s_%s_%s_%s_%s_%s.csv' % (
+                #                 stat, models['best'][i], models['best'][j], otype, ts, dd))
+                            
+                #             dfp = pd.read_csv('./plots/mt_%s_pval_%s_%s_%s_%s_%s.csv' % (
+                #                 stat.split('_')[0], models['best'][i], models['best'][j], otype, ts, dd))
+
+                #             # rename the column headers
+                #             columns = ['Index', 'm', 'Short-Term', 'Medium-Term', 'Long-Term']
+                #             df.columns = columns
+                #             dfp.columns = columns
+                #             df['m'] = ['\\ac{ITM}', '\\ac{ATM}', '\\ac{OTM}']
+                #             dfp['m'] = ['\\ac{ITM}', '\\ac{ATM}', '\\ac{OTM}']
+                            
+                #             # Remove column Index
+                #             df = df.drop('Index', axis=1)
+                #             df.set_index('m', inplace=True)
+                #             dfp = dfp.drop('Index', axis=1)
+                #             dfp.set_index('m', inplace=True)
+                #             print(df)
+
+                #             # Map function to check if the corrisponding p-value is significant
+                #             def check_significance(x, xp):
+                #                 result = np.where(xp > 0.05 ,f"font-weight: bold;" , None)
+
+                #                 # if result.all():
+                #                 #     # set all values to None
+                #                 #     result = np.where(xp < 0.05, None, None)
+
+                #                 # # Set value to None if x is nan 
+                #                 # result = np.where(x != x, None, result)
+                                
+                #                 return result
+                            
+                #             s = df.style.apply(check_significance, xp=dfp, axis=None)
+                #             s.format('{:.2f}' )
+                            
+                #             s.to_latex(buf='../feature_paper/figs/mt/mt-%s-%s-%s-%s-%s-%s-%s.tex' % (
+                #                 stat, models['best'][i], models['best'][j], otype, ts, dd, 'best'), column_format='l'*df.columns.size+'l', hrules=True, convert_css=True)
+
+    # # # XXX: Generate latex table for dmtest rmse
     # for otype in ['call']:
     #     for ts in [5, 10, 20]:
     #         for dd in ['figs']:
     #             for feature in ['surf', 'point', 'skew', 'termstructure']:
     #                 for mmodel in ['ridge', 'lasso', 'enet']:
-    #                     df = pd.read_csv(
-    #                         './plots/dstat_%s_%s_%s_%s_%s_rmse.csv' % (
-    #                             otype, ts, dd, feature, mmodel))
-
+    #                     df = pd.read_csv('./plots/dstat_%s_%s_%s_%s_%s_rmse.csv' % (
+    #                         otype, ts, dd, feature, mmodel))
+    #                     dfp = pd.read_csv('./plots/pval_%s_%s_%s_%s_%s_rmse.csv' % (
+    #                         otype, ts, dd, feature, mmodel))
+                        
+    #                     dfr = pd.read_csv('./plots/r2cmp_%s_%s_%s_%s_%s.csv' % (
+    #                         otype, ts, dd, feature, mmodel))
+    #                     dfrp = pd.read_csv('./plots/r2cmp_pval_%s_%s_%s_%s_%s.csv' % (
+    #                         otype, ts, dd, feature, mmodel))
+                        
+                        
     #                     # rename the column headers
-    #                     columns = ['SAM', '\\ac{PCA}',
-    #                                '\\ac{CCA}', '\\ac{NS}', '\\ac{ADNS}',
-    #                                '\\ac{SSVI}', '\\ac{HAR}', '\\ac{VAE}']
-    #                     index = ['SAM', '\\ac{PCA}', '\\ac{CCA}', '\\ac{NS}',
-    #                              '\\ac{ADNS}', '\\ac{SSVI}', '\\ac{HAR}',
-    #                              '\\ac{VAE}']
+    #                     columns = ['SAM', '\\ac{PCA}', '\\ac{CCA}', '\\ac{NS}', '\\ac{ADNS}', '\\ac{SSVI}', '\\ac{HAR}', '\\ac{VAE}']
+    #                     index = ['SAM', '\\ac{PCA}', '\\ac{CCA}', '\\ac{NS}', '\\ac{ADNS}', '\\ac{SSVI}', '\\ac{HAR}', '\\ac{VAE}']
 
     #                     if feature == 'surf':
     #                         columns.remove('\\ac{NS}')
@@ -1916,86 +2243,315 @@ if __name__ == '__main__':
     #                         index.remove('\\ac{SSVI}')
     #                         index.remove('\\ac{ADNS}')
 
+    #                     s.format('{:.1f}', na_rep=" ")
+
     #                     df.columns = columns
     #                     df.index = index
+    #                     dfp.columns = columns
+    #                     dfp.index = index
+
+    #                     dfr.columns = columns
+    #                     dfr.index = index
+    #                     dfrp.columns = columns
+    #                     dfrp.index = index
 
     #                     # Remove the vae index
     #                     df = df.drop('\\ac{VAE}', axis=0)
+    #                     dfp = dfp.drop('\\ac{VAE}', axis=0)
+
+    #                     dfr = dfr.drop('\\ac{VAE}', axis=0)
+    #                     dfrp = dfrp.drop('\\ac{VAE}', axis=0)
+
+
     #                     # remove the har index if ts != 20
-    #                     if ts != 20:
-    #                         df = df.drop('\\ac{HAR}', axis=0)
-    #                     # set all 0.0 float values to nan
-    #                     df = df.replace(0.0, np.nan)
-    #                     s = df.style.highlight_max(props='textbf:--rwrap;')
+    #                     # if ts != 20:
+    #                     #     dfp = dfp.drop('\\ac{HAR}', axis=0)
+    #                     #     df = df.drop('\\ac{HAR}', axis=0)
 
-    #                     s.format('{:.1f}', na_rep="-")
+    #                     #     dfrp = dfrp.drop('\\ac{HAR}', axis=0)
+    #                     #     dfr = dfr.drop('\\ac{HAR}', axis=0)
 
-    #                     s.to_latex(
-    #                         buf='../feature_paper/figs/dstat/
-    # dstat_%s_%s_%s_%s_%s_rmse.tex' % (
-    #                             otype, ts, dd, feature, mmodel),
-    #                         column_format='l'*df.columns.size, hrules=True)
+    #                     #     #convert har to nan
+    #                     #     df['\\ac{HAR}'] = np.nan
+    #                     #     dfr['\\ac{HAR}'] = np.nan
+
+    #                     # set the values past the diagonal to nan
+    #                     for i in range(df.shape[0]):
+    #                         for j in range(df.shape[1]):
+    #                             if i >= j:
+    #                                 df.iloc[i, j] = np.nan
+    #                                 dfr.iloc[i, j] = np.nan
+
+    #                     # Drop the first column
+    #                     df = df.drop('SAM', axis=1)
+    #                     dfp = dfp.drop('SAM', axis=1)
+
+    #                     dfr = dfr.drop('SAM', axis=1)
+    #                     dfrp = dfrp.drop('SAM', axis=1)
+
+    #                     # Map function to check if the corrisponding p-value is significant
+    #                     def check_significance(x, xp):
+    #                         result = np.where(xp > 0.05 ,f"font-weight: bold;" , None)
+
+    #                         # if result.all():
+    #                         #     # set all values to None
+    #                         #     result = np.where(xp < 0.05, None, None)
+
+    #                         # # Set value to None if x is nan 
+    #                         # result = np.where(x != x, None, result)
+                            
+    #                         return result
+                        
+    #                     s = df.style.apply(check_significance, xp=dfp, axis=None)
+    #                     sr = dfr.style.apply(check_significance, xp=dfrp, axis=None)
+                        
+    #                     # only style the dstat values if they are significant
+    #                     # for i in range(df.shape[0]):
+    #                     #     for j in range(df.shape[1]):
+    #                     #         if dfp.iloc[i, j] > 0.05:
+    #                     #             df.iloc[i, j] = np.nan
+
+    #                     s.format('{:.1f}', na_rep=" ")
+    #                     sr.format('{:.1f}', na_rep=" ")
+
+    #                     # print(s.to_latex(column_format='l'*df.columns.size+'l', hrules=True, convert_css=True))
+    #                     # print(sr.to_latex(column_format='l'*dfr.columns.size+'l', hrules=True, convert_css=True))
+
+    #                     s.to_latex(buf='../feature_paper/figs/dstat/dstat-%s-%s-%s-%s-%s-rmse.tex' % (
+    #                         otype, ts, dd, feature, mmodel), column_format='l'*df.columns.size+'l', hrules=True, convert_css=True) 
+    #                     sr.to_latex(buf='../feature_paper/figs/r2cmp/r2cmp-%s-%s-%s-%s-%s.tex' % (
+    #                         otype, ts, dd, feature, mmodel), column_format='l'*dfr.columns.size+'l', hrules=True, convert_css=True)
+
+    # #                     # df.to_latex(buf='./plots/%s_%s_%s_%s_rmse.tex' % (
+    # #                     #     otype, ts, dd, mmodel), header=True)
+
+    # for otype in ['call']:
+    #         for ts in [5, 10, 20]:
+    #             for dd in ['figs']:
+    #                 for feature in ['surf', 'point', 'skew', 'termstructure']:
+    #                     mmodel = 'all'
+    #                     df = pd.read_csv('./plots/dstat_%s_%s_%s_%s_%s_rmse.csv' % (
+    #                             otype, ts, dd, feature, mmodel))
+    #                     dfp = pd.read_csv('./plots/pval_%s_%s_%s_%s_%s_rmse.csv' % (
+    #                         otype, ts, dd, feature, mmodel))
+                        
+    #                     dfr = pd.read_csv('./plots/r2cmp_%s_%s_%s_%s_%s.csv' % (
+    #                         otype, ts, dd, feature, mmodel))
+    #                     dfrp = pd.read_csv('./plots/r2cmp_pval_%s_%s_%s_%s_%s.csv' % (
+    #                         otype, ts, dd, feature, mmodel))
+
+    #                     if feature == 'surf' or feature ==  'skew':
+    #                         ridge_col = 'HAR'
+    #                     else: 
+    #                         ridge_col = 'SAM'
+                        
+    #                     # rename the column headers
+    #                     columns = ['Ridge-%s' % ridge_col, 'Lasso-\\ac{CCA}', 'Elastic Net-\\ac{CCA}']
+    #                     index = ['Ridge-%s' % ridge_col, 'Lasso-\\ac{CCA}', 'Elastic Net-\\ac{CCA}']
+
+    #                     df.columns = columns
+    #                     df.index = index
+    #                     dfp.columns = columns
+    #                     dfp.index = index
+
+    #                     dfr.columns = columns
+    #                     dfr.index = index
+    #                     dfrp.columns = columns
+    #                     dfrp.index = index
+
+    #                     # Remove the elastic net cca index
+    #                     df = df.drop('Elastic Net-\\ac{CCA}', axis=0)
+    #                     dfp = dfp.drop('Elastic Net-\\ac{CCA}', axis=0)
+
+    #                     dfr = dfr.drop('Elastic Net-\\ac{CCA}', axis=0)
+    #                     dfrp = dfrp.drop('Elastic Net-\\ac{CCA}', axis=0)
+
+
+    #                     # set the values past the diagonal to nan
+    #                     for i in range(df.shape[0]):
+    #                         for j in range(df.shape[1]):
+    #                             if i >= j:
+    #                                 df.iloc[i, j] = np.nan
+    #                                 dfr.iloc[i, j] = np.nan
+
+    #                     # Drop the first column
+    #                     df = df.drop('Ridge-%s' % ridge_col, axis=1)
+    #                     dfp = dfp.drop('Ridge-%s' % ridge_col, axis=1)
+
+    #                     dfr = dfr.drop('Ridge-%s' % ridge_col, axis=1)
+    #                     dfrp = dfrp.drop('Ridge-%s' % ridge_col, axis=1)
+
+
+    #                     # Map function to check if the corrisponding p-value is significant
+    #                     def check_significance(x, xp):
+    #                         result = np.where(xp > 0.05 ,f"font-weight: bold;" , None)
+
+    #                         # if result.all():
+    #                         #     # set all values to None
+    #                         #     result = np.where(xp < 0.05, None, None)
+
+    #                         # # Set value to None if x is nan 
+    #                         # result = np.where(x != x, None, result)
+                            
+    #                         return result
+                        
+    #                     s = df.style.apply(check_significance, xp=dfp, axis=None)
+    #                     sr = dfr.style.apply(check_significance, xp=dfrp, axis=None)
+                        
+    #                     s.format('{:.1f}', na_rep=" ")
+    #                     sr.format('{:.1f}', na_rep=" ")
+
+    #                     # print(s.to_latex(column_format='l'*df.columns.size+'l', hrules=True, convert_css=True))
+    #                     # print(sr.to_latex(column_format='l'*dfr.columns.size+'l', hrules=True, convert_css=True))
+
+    #                     s.to_latex(buf='../feature_paper/figs/dstat/dstat-%s-%s-%s-%s-%s-rmse.tex' % (
+    #                         otype, ts, dd, feature, mmodel), column_format='l'*df.columns.size+'l', hrules=True, convert_css=True) 
+    #                     sr.to_latex(buf='../feature_paper/figs/r2cmp/r2cmp-%s-%s-%s-%s-%s.tex' % (
+    #                         otype, ts, dd, feature, mmodel), column_format='l'*dfr.columns.size+'l', hrules=True, convert_css=True)
+
+    #                     # df.to_latex(buf='./plots/%s_%s_%s_%s_rmse.tex' % (
+    #                     #     otype, ts, dd, mmodel), header=True) 
+
+    # # # XXX: Generate latex table for dmtest and rmse cmp acrross lags
+    # for otype in ['call']:
+    #     for dd in ['figs']:
+    #         for models in ['pmridge', 'tskridge']:
+    #             df = pd.read_csv('./plots/lag_dstat_%s_%s_%s.csv' % (
+    #                     otype, dd, models))
+    #             dfp = pd.read_csv('./plots/lag_dstat_pval_%s_%s_%s.csv' % (
+    #                 otype, dd, models))
+
+    #             dfr = pd.read_csv('./plots/lag_r2_%s_%s_%s.csv' % (
+    #                 otype, dd, models))
+    #             dfrp = pd.read_csv('./plots/lag_r2_pval_%s_%s_%s.csv' % (
+    #                 otype, dd, models))
+
+    #             # rename the column headers
+    #             columns = ['Lag 20', 'Lag 10', 'Lag 5']
+    #             index = ['Lag 20', 'Lag 10', 'Lag 5']
+
+    #             df.columns = columns
+    #             df.index = index
+    #             dfp.columns = columns
+    #             dfp.index = index
+
+    #             dfr.columns = columns
+    #             dfr.index = index
+    #             dfrp.columns = columns
+    #             dfrp.index = index
+
+    #             # Remove lag 5 index
+    #             df = df.drop('Lag 5', axis=0)
+    #             dfp = dfp.drop('Lag 5', axis=0)
+
+    #             dfr = dfr.drop('Lag 5', axis=0)
+    #             dfrp = dfrp.drop('Lag 5', axis=0)
+
+
+    #             # set the values past the diagonal to nan
+    #             for i in range(df.shape[0]):
+    #                 for j in range(df.shape[1]):
+    #                     if i >= j:
+    #                         df.iloc[i, j] = np.nan
+    #                         dfr.iloc[i, j] = np.nan
+
+    #             # Remove the lag 20 column
+    #             df = df.drop('Lag 20', axis=1)
+    #             dfp = dfp.drop('Lag 20', axis=1)
+
+    #             dfr = dfr.drop('Lag 20', axis=1)
+    #             dfrp = dfrp.drop('Lag 20', axis=1)
+
+    #             # Map function to check if the corrisponding p-value is significant
+    #             def check_significance(x, xp):
+    #                 result = np.where(xp > 0.05 ,f"font-weight: bold;" , None)
+
+    #                 # if result.all():
+    #                 #     # set all values to None
+    #                 #     result = np.where(xp < 0.05, None, None)
+
+    #                 # # Set value to None if x is nan 
+    #                 # result = np.where(x != x, None, result)
+    
+    #                 return result
+
+    #             s = df.style.apply(check_significance, xp=dfp, axis=None)
+    #             sr = dfr.style.apply(check_significance, xp=dfrp, axis=None)
+
+    #             s.format('{:.1f}', na_rep=" ")
+    #             sr.format('{:.1f}', na_rep=" ")
+
+    #             # print(s.to_latex(column_format='l'*df.columns.size+'l', hrules=True, convert_css=True))
+    #             # print(sr.to_latex(column_format='l'*dfr.columns.size+'l', hrules=True, convert_css=True))
+
+    #             s.to_latex(buf='../feature_paper/figs/dstat/lag-dstat-%s-%s-%s-rmse.tex' % (
+    #                 otype, dd, models), column_format='l'*df.columns.size+'l', hrules=True, convert_css=True) 
+    #             sr.to_latex(buf='../feature_paper/figs/r2cmp/lag-r2cmp-%s-%s-%s.tex' % (
+    #                 otype, dd, models), column_format='l'*dfr.columns.size+'l', hrules=True, convert_css=True)
+
+                # df.to_latex(buf='./plots/%s_%s_%s_%s_rmse.tex' % (
+                #     otype, ts, dd, mmodel), header=True)  
 
     # df.to_latex(buf='./plots/%s_%s_%s_%s_rmse.tex' % (
     #     otype, ts, dd, mmodel), header=True)
 
-    def setup_trade(model):
-        for otype in ['call', 'put']:
-            # XXX: Change or add to the loops as needed
-            for dd in ['figs']:
-                for ts in [5]:
-                    name = ('./final_results/%s_%s_ts_%s_model_%s.npy.gz' %
-                            (otype, dd, ts, model))
-                    print('Doing model: ', name)
-                    dates, y, yp = getpreds_trading(name, otype)
-                    trade(dates, y, yp, otype, model)
+    # def setup_trade(model):
+    #     for otype in ['call', 'put']:
+    #         # XXX: Change or add to the loops as needed
+    #         for dd in ['figs']:
+    #             for ts in [5]:
+    #                 name = ('./final_results/%s_%s_ts_%s_model_%s.npy.gz' %
+    #                         (otype, dd, ts, model))
+    #                 print('Doing model: ', name)
+    #                 dates, y, yp = getpreds_trading(name, otype)
+    #                 trade(dates, y, yp, otype, model)
 
-    # XXX: The trading part, only for the best model
-    models = ['ridge', 'ssviridge', 'plsridge', 'ctridge',
-              'tskridge', 'tskplsridge', 'tsknsridge',
-              'mskridge', 'msknsridge', 'mskplsridge',
-              'pmridge', 'pmplsridge']
-    from joblib import Parallel, delayed
-    Parallel(n_jobs=-1)(delayed(setup_trade)(model)
-                        for model in models)
+    # # XXX: The trading part, only for the best model
+    # models = ['ridge', 'ssviridge', 'plsridge', 'ctridge',
+    #           'tskridge', 'tskplsridge', 'tsknsridge',
+    #           'mskridge', 'msknsridge', 'mskplsridge',
+    #           'pmridge', 'pmplsridge']
+    # from joblib import Parallel, delayed
+    # Parallel(n_jobs=-1)(delayed(setup_trade)(model)
+    #                     for model in models)
 
-    for otype in ['call', 'put']:
-        alphas = list()
-        betas = list()
-        cagrs = list()
-        wins = list()
-        maxs = list()
-        mins = list()
-        avgs = list()
-        medians = list()
-        sds = list()
-        srs = list()
-        ns = list()
-        # XXX: Change or add to the loops as needed
-        for dd in ['figs']:
-            for ts in [5]:
-                for model in models:
-                    analyse_trades(otype, model, ts,
-                                   alphas, betas,
-                                   cagrs, wins,
-                                   maxs, mins,
-                                   avgs, medians, sds, srs, ns)
-        df = pd.DataFrame({'alpha': alphas, 'beta': betas,
-                           'cagr (%)': cagrs, 'win (%)': wins,
-                           'max (%)': maxs, 'min (%)': mins,
-                           'mean (%)': avgs, 'median (%)': medians,
-                           'std (%)': sds, 'sharpe ratio': srs,
-                           'N': ns},
-                          index=models)
-        df.to_csv('./trades/%s_trades.csv' % otype)
-        # df = pd.DataFrame(resa, index=[0])
-        # df.to_csv('./trades/alpha_%s.csv' % otype)
-        # df = pd.DataFrame(resb, index=[0])
-        # df.to_csv('./trades/beta_%s.csv' % otype)
+    # for otype in ['call', 'put']:
+    #     alphas = list()
+    #     betas = list()
+    #     cagrs = list()
+    #     wins = list()
+    #     maxs = list()
+    #     mins = list()
+    #     avgs = list()
+    #     medians = list()
+    #     sds = list()
+    #     srs = list()
+    #     ns = list()
+    #     # XXX: Change or add to the loops as needed
+    #     for dd in ['figs']:
+    #         for ts in [5]:
+    #             for model in models:
+    #                 analyse_trades(otype, model, ts,
+    #                                alphas, betas,
+    #                                cagrs, wins,
+    #                                maxs, mins,
+    #                                avgs, medians, sds, srs, ns)
+    #     df = pd.DataFrame({'alpha': alphas, 'beta': betas,
+    #                        'cagr (%)': cagrs, 'win (%)': wins,
+    #                        'max (%)': maxs, 'min (%)': mins,
+    #                        'mean (%)': avgs, 'median (%)': medians,
+    #                        'std (%)': sds, 'sharpe ratio': srs,
+    #                        'N': ns},
+    #                       index=models)
+    #     df.to_csv('./trades/%s_trades.csv' % otype)
+    #     df = pd.DataFrame(resa, index=[0])
+    #     df.to_csv('./trades/alpha_%s.csv' % otype)
+    #     df = pd.DataFrame(resb, index=[0])
+    #     df.to_csv('./trades/beta_%s.csv' % otype)
 
     # XXX: The statistics for the complete dataset
     # cdfm = list()
-    # cdft = list()
+    # t = list()
     # cdfiv = list()
     # pdft = list()
     # pdfm = list()
