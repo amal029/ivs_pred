@@ -16,6 +16,19 @@ from pred import cr2_score, cr2_score_pval
 from keras.layers import Input, LSTM
 from keras.models import Model
 import keras
+from scipy.optimize import minimize
+from scipy.optimize import differential_evolution
+from scipy.optimize import NonlinearConstraint
+
+
+# XXX: This function loads the real data
+def load_real_data(dd='./interest_rates', otype='call'):
+    toret = dict()
+    for d in range(2002, 2003):
+        ff = sorted(glob.glob(dd+'/'+str(d)+'*.csv'))
+        for i in ff:
+            toret[i] = pd.read_csv(i)
+    return toret
 
 
 def load_data(otype, dd='./figs', START='20020208', NUM_IMAGES=2000):
@@ -511,5 +524,98 @@ def main():
               cr2_score_pval(yT, plY, paY))
 
 
+# XXX: For fitting a single slice (at a given maturity across log moneyness)
+def sviraw(k, t, param):
+    a = param[0]
+    b = param[1]
+    m = param[2]
+    rho = param[3]
+    sigma = param[4]
+
+    totalvariance = a + b * (rho * (k - m) +
+                             np.sqrt((k - m) ** 2 + sigma**2))
+    return totalvariance
+
+
+def lprocess_data(dfs, otype):
+    # XXX: The function to compute the optimal transformed problem
+    def linear_obj(params, veck, w):
+        sigma = params[0]
+        m = params[1]
+        X = np.ones(veck.shape[0]*3).reshape(veck.shape[0], 3)
+        Y = w                 # vector of real total variance
+        for i in range(veck.shape[0]):
+            yy = (veck.iloc[i]-m)/sigma
+            X[i] = [1, yy, np.sqrt(yy**2+1)]
+        # XXX: Solve using linear algebra
+        beta = np.dot(np.linalg.inv(np.dot(X.T, X)), np.dot(X.T, Y))
+        # toret = np.dot(X, beta)
+        # print('toret: ', toret, 'beta: ', beta)
+        # print('X: ', X)
+        # XXX: These are the linearized constants
+        return np.dot(X, beta), beta
+
+    # XXX: The target optimisation function
+    def obj(params, veck, w):
+        pw, _ = linear_obj(params, veck, w)
+        return np.sum((pw - w)**2)
+
+    # count = 0
+    for k, df in dfs.items():
+        # count += 1
+        # if count < 10:
+        #     continue
+        print('Doing: ', k)
+        df = df[df['Type'] == otype]
+        taus = sorted(df['tau'].unique())
+        # XXX: For each given tau fit the SVI param
+        for t in taus:
+            dfw = df[df['tau'] == t][['m', 'IV', 'Strike']]
+            dfw['w'] = dfw['IV']**2 * t
+            dfw['lnm'] = np.log(dfw['m'])
+            bounds = [(1e-6, np.inf),
+                      (dfw['lnm'].min(), dfw['lnm'].max())]
+            res = minimize(obj,
+                           args=(dfw['lnm'],
+                                 dfw['w']),
+                           bounds=bounds,
+                           tol=1e-8,
+                           method='Nelder-Mead',
+                           options={'disp': True,
+                                    'maxiter': 100000},
+                           # XXX: Make this 10-100 restarts with
+                           # randonly chosen points
+                           x0=(0.5,  # sigma
+                               dfw['lnm'].min())  # m
+                           )
+            print(res)
+            if res.success:
+                fparams = res.x
+                sigma = fparams[0]
+                m = fparams[1]
+                # XXX: Get the linear param values
+                pw, lparams = linear_obj(fparams, dfw['lnm'], dfw['w'])
+                # print('fparams: ', fparams)
+                # print('lparams: ', lparams)
+                # print('pw: ', pw)
+                # print('w: ', dfw['w'])
+                # print('error: ', np.sum((pw - dfw['w'])**2))
+                # XXX: Now just plot the graph
+                K = np.linspace(-1.5, 1.5, 100)
+                pIVS = [(lparams[0] +
+                         lparams[1]*((i-m)/sigma) +
+                         lparams[2]*np.sqrt(((i-m)/sigma)**2+1))
+                        for i in K]
+                # print('PIVS: ', pIVS)
+                plt.plot(K, pIVS)
+            plt.plot(dfw['lnm'], dfw['w'], marker='o', linestyle='none')
+            plt.show()
+            plt.close()
+            assert (False)
+
+
 if __name__ == '__main__':
-    main()
+    # XXX: Read the real world data
+    dfs = load_real_data()
+    lprocess_data(dfs, 'call')
+    # main()
