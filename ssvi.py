@@ -538,8 +538,16 @@ def sviraw(k, t, param):
 
 
 def lprocess_data(dfs, otype):
-    # XXX: The function to compute the optimal transformed problem
-    def linear_obj(params, veck, w):
+    def inner_opt(params, veck, w):
+        def mobj(params, X, Y):
+            return np.sum((np.dot(X, params) - Y)**2)
+
+        def con1(params):
+            return params[2]-np.abs(params[1])
+
+        def con2(params):
+            return 4*sigma - params[2] - np.abs(params[1])
+
         sigma = params[0]
         m = params[1]
         X = np.ones(veck.shape[0]*3).reshape(veck.shape[0], 3)
@@ -547,17 +555,29 @@ def lprocess_data(dfs, otype):
         for i in range(veck.shape[0]):
             yy = (veck.iloc[i]-m)/sigma
             X[i] = [1, yy, np.sqrt(yy**2+1)]
-        # XXX: Solve using linear algebra
+        # XXX: This gets the initial values using the paper:
+        # XXX: ADAM OHMAN thesis (KTH)
         beta = np.dot(np.linalg.inv(np.dot(X.T, X)), np.dot(X.T, Y))
-        # toret = np.dot(X, beta)
-        # print('toret: ', toret, 'beta: ', beta)
-        # print('X: ', X)
-        # XXX: These are the linearized constants
-        return np.dot(X, beta), beta
+        mbounds = [(0, w.max()),  # a
+                   (-np.inf, np.inf),  # d
+                   (0, 4*sigma)       # c
+                   ]
+        res = minimize(mobj,
+                       args=(X, Y),
+                       bounds=mbounds,
+                       tol=1e-8,
+                       method='COBYQA',
+                       options={'disp': False,
+                                'maxiter': 100000},
+                       x0=(beta[0], beta[1], beta[2]),
+                       constraints=[{'type': 'ineq', 'fun': con1},
+                                    {'type': 'ineq', 'fun': con2}]
+                       )
+        return np.dot(X, res.x), res.x
 
     # XXX: The target optimisation function
     def obj(params, veck, w):
-        pw, _ = linear_obj(params, veck, w)
+        pw, _ = inner_opt(params, veck, w)
         return np.sum((pw - w)**2)
 
     # count = 0
@@ -573,33 +593,29 @@ def lprocess_data(dfs, otype):
             dfw = df[df['tau'] == t][['m', 'IV', 'Strike']]
             dfw['w'] = dfw['IV']**2 * t
             dfw['lnm'] = np.log(dfw['m'])
-            bounds = [(1e-6, np.inf),
+            bounds = [(0.005, np.inf),  # sigma, 0.005 from paper
+                                        # Zelaide systems
                       (dfw['lnm'].min(), dfw['lnm'].max())]
             res = minimize(obj,
                            args=(dfw['lnm'],
                                  dfw['w']),
                            bounds=bounds,
                            tol=1e-8,
-                           method='Nelder-Mead',
-                           options={'disp': True,
+                           method='COBYQA',
+                           options={'disp': False,
                                     'maxiter': 100000},
                            # XXX: Make this 10-100 restarts with
                            # randonly chosen points
                            x0=(0.5,  # sigma
-                               dfw['lnm'].min())  # m
+                               dfw['lnm'].max())  # m
                            )
-            print(res)
             if res.success:
                 fparams = res.x
                 sigma = fparams[0]
                 m = fparams[1]
                 # XXX: Get the linear param values
-                pw, lparams = linear_obj(fparams, dfw['lnm'], dfw['w'])
-                # print('fparams: ', fparams)
-                # print('lparams: ', lparams)
-                # print('pw: ', pw)
-                # print('w: ', dfw['w'])
-                # print('error: ', np.sum((pw - dfw['w'])**2))
+                pw, lparams = inner_opt(fparams, dfw['lnm'], dfw['w'])
+                assert (lparams[0] >= 0)
                 # XXX: Now just plot the graph
                 K = np.linspace(-1.5, 1.5, 100)
                 pIVS = [(lparams[0] +
@@ -611,7 +627,7 @@ def lprocess_data(dfs, otype):
             plt.plot(dfw['lnm'], dfw['w'], marker='o', linestyle='none')
             plt.show()
             plt.close()
-            assert (False)
+        assert (False)
 
 
 if __name__ == '__main__':
