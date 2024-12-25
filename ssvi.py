@@ -22,7 +22,7 @@ from scipy.optimize import minimize
 # XXX: This function loads the real data
 def load_real_data(dd='./interest_rates', otype='call'):
     toret = dict()
-    for d in range(2022, 2023):
+    for d in range(2002, 2024):
         ff = sorted(glob.glob(dd+'/'+str(d)+'*.csv'))
         for i in ff:
             toret[i] = pd.read_csv(i)
@@ -535,6 +535,45 @@ def sviraw(k, t, param):
     return totalvariance
 
 
+# XXX: Fitting the ATM term structure
+def ATMTS_fit(ATMTS: np.array, taus, k,
+              f=lambda a, beta, mu, t: mu + a*(1 - np.exp(-beta*t))):
+    """1) The ATM term structure data points themselves
+    2) The func objective that should be fitted
+    """
+    def obj(params: np.array, sigma: np.array, taus: list):
+        alpha = params[0]
+        beta = params[1]
+        mu = params[2]
+        res = np.array([f(alpha, beta, mu, t) for t in taus])
+        return np.sum((sigma - res)**2)
+
+    bounds = [(1e-6, np.inf), (1e-6, np.inf),
+              (-np.inf, np.inf)]
+    res = minimize(
+        obj,
+        bounds=bounds,
+        tol=1e-8,
+        # method='Nelder-Mead',
+        options={'disp': False,
+                 'maxiter': 100000},
+        x0=(0.1, 0.0047, 0),
+        args=(ATMTS, taus)
+    )
+    if res.success:
+        alpha = res.x[0]
+        beta = res.x[1]
+        mu = res.x[2]
+        # print('alpha: %s beta: %s mu: %s' % (alpha, beta, mu))
+        # x = [i/365 for i in list(range(14, 365*2))]
+        # TS = [f(alpha, beta, mu, t) for t in x]
+        # plt.plot(x, TS)
+        # plt.plot(taus, ATMTS, marker='o', linestyle='none')
+        # plt.savefig('/tmp/%s_ATMTS.pdf' % k, bbox_inches='tight')
+        # plt.close()
+        return alpha, beta, mu
+
+
 def lprocess_data(dfs, otype):
     def inner_opt(params, veck, w):
         def mobj(params, X, Y):
@@ -555,7 +594,12 @@ def lprocess_data(dfs, otype):
             X[i] = [1, yy, np.sqrt(yy**2+1)]
         # XXX: This gets the initial values using the paper:
         # XXX: ADAM OHMAN thesis (KTH)
-        beta = np.dot(np.linalg.inv(np.dot(X.T, X)), np.dot(X.T, Y))
+        try:
+            beta = np.dot(np.linalg.inv(np.dot(X.T, X)), np.dot(X.T, Y))
+        except Exception:
+            # XXX: Catch any exceptions
+            beta = [0, 0, 0]
+
         mbounds = [(0, w.max()),  # a
                    (-np.inf, np.inf),  # d
                    (0, 4*sigma)       # c
@@ -578,45 +622,9 @@ def lprocess_data(dfs, otype):
         pw, _ = inner_opt(params, veck, w)
         return np.sum((pw - w)**2)
 
-    # XXX: Fitting the ATM term structure
-    def ATMTS_fit(ATMTS: np.array, taus, k,
-                  f=lambda a, ll, t: a*(1 - np.exp(-ll*t))):
-        """1) The ATM term structure data points themselves
-           2) The func objective that should be fitted
-        """
-        def obj(params: np.array, sigma: np.array, taus: list):
-            alpha = params[0]
-            beta = params[1]
-            res = np.array([f(alpha, beta, t) for t in taus])
-            return np.sum((sigma - res)**2)
-
-        bounds = [(1e-6, np.inf), (1e-6, np.inf)]
-        res = minimize(
-            obj,
-            bounds=bounds,
-            tol=1e-8,
-            # method='COBYQA',
-            options={'disp': False,
-                     'maxiter': 100000},
-            x0=(0.1, 0.0047),
-            args=(ATMTS, taus)
-        )
-        # print(res)
-        if res.success:
-            alpha = res.x[0]
-            beta = res.x[1]
-            x = [i/365 for i in list(range(14, 365*2))]
-            TS = [f(alpha, beta, t) for t in x]
-            plt.plot(x, TS)
-            plt.plot(taus, ATMTS, marker='o', linestyle='none')
-            plt.savefig('/tmp/%s_ATMTS.pdf' % k, bbox_inches='tight')
-            plt.close()
-
-    # count = 0
-    for k, df in dfs.items():
-        # count += 1
-        # if count < 10:
-        #     continue
+    def compute(df, k):
+        thetaFits = {'alpha': list(), 'beta': list(), 'mu': list(),
+                     'tau': list(), 'theta': list(), 'date': list()}
         print('Doing: ', k)
         # XXX: Tenors to consider
         df = df[(df['Type'] == otype) & (df['tau'] >= 14/365) &
@@ -625,8 +633,8 @@ def lprocess_data(dfs, otype):
         df = df[(df['m'] >= 0.8) & (df['m'] <= 1.2) & (df['Volume'] > 1)]
         taus = sorted(df['tau'].unique())
         # XXX: For each given tau fit the SVI param
-        thetats = dict()
-        fig, (ax, ax2) = plt.subplots(nrows=2, ncols=1)
+        thetats = list()
+        ttaus = list()
         for t in taus:
             dfw = df[df['tau'] == t][['m', 'IV', 'Strike']]
             dfw['w'] = dfw['IV']**2 * t
@@ -645,7 +653,7 @@ def lprocess_data(dfs, otype):
                            options={'disp': False,
                                     'maxiter': 100000},
                            # XXX: Make this 10-100 restarts with
-                           # randonly chosen points
+                           # randomly chosen points
                            x0=(0.5,  # sigma
                                dfw['lnm'].max())  # m
                            )
@@ -656,37 +664,32 @@ def lprocess_data(dfs, otype):
                 # XXX: Get the linear param values
                 pw, lparams = inner_opt(fparams, dfw['lnm'], dfw['w'])
                 a, d, c = lparams[0], lparams[1], lparams[2]
-                b = c/sigma
-                rho = d/(b*sigma)
                 assert (lparams[0] >= 0)
-                # XXX: This is \Sigma from Roper' condition (ADAM OHAN)
-                thetats[t] = np.sqrt((a +
-                                      b * (-rho*m +
-                                           np.sqrt(m**2 +
-                                                   sigma**2)))/t)*np.sqrt(t)
-                # XXX: Now just plot the graph
-                K = np.linspace(-1.5, 1.5, 100)
-                pIVS = [(lparams[0] +
-                         lparams[1]*((i-m)/sigma) +
-                         lparams[2]*np.sqrt(((i-m)/sigma)**2+1))
-                        for i in K]
-                # print('PIVS: ', pIVS)
-                ax.plot(K, pIVS)
-            ax.plot(dfw['lnm'], dfw['w'], marker='o', linestyle='none')
-        ax2.plot(taus, list(thetats.values()), marker='*', linestyle='--')
-        plt.savefig('/tmp/%s.pdf' % k.split('/')[-1],
-                    bbox_inches='tight')
-        plt.close(fig)
-        # print('thetats: ', thetats)
-        # print('thetats len: ', len(list(thetats.items())))
+                assert (sigma > 0)
+                vv = np.sqrt(a + d*(-m/sigma) + c*np.sqrt((m/sigma)**2+1))
+                thetats.append(vv)
+                ttaus.append(t)
+                # FIXME: Fix static arbitrage here
         # XXX: Fit the \Sigma to alpha*(1-exp(-lambda*t))
-        ATMTS_fit(np.array(list(thetats.values())), list(thetats.keys()),
-                  k.split('/')[-1])
-        assert (False)
+        (a, b, m) = ATMTS_fit(np.array(thetats), ttaus, k.split('/')[-1])
+        thetaFits['date'].append(k.split('/')[-1].split('.')[0])     # date
+        thetaFits['alpha'].append(a)     # alpha
+        thetaFits['beta'].append(b)     # beta
+        thetaFits['mu'].append(m)     # mu
+        thetaFits['tau'].append(ttaus)  # taus
+        thetaFits['theta'].append(thetats)  # raw theta values
+        return thetaFits
+
+    from joblib import Parallel, delayed
+    res = Parallel(n_jobs=12)(delayed(compute)(df, k)
+                              for k, df in dfs.items())
+    return res
 
 
 if __name__ == '__main__':
     # XXX: Read the real world data
     dfs = load_real_data()
-    lprocess_data(dfs, 'call')
+    thetaFits = lprocess_data(dfs, 'call')
+    import mpu
+    mpu.io.write('/tmp/thetaFits.json', thetaFits)
     # main()
