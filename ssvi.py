@@ -17,6 +17,7 @@ from keras.layers import Input, LSTM
 from keras.models import Model
 import keras
 from scipy.optimize import minimize
+import mpu
 
 
 # XXX: This function loads the real data
@@ -25,7 +26,7 @@ def load_real_data(dd='./interest_rates', otype='call'):
     for d in range(2002, 2024):
         ff = sorted(glob.glob(dd+'/'+str(d)+'*.csv'))
         for i in ff:
-            toret[i] = pd.read_csv(i)
+            toret[i.split('/')[-1].split('.')[0]] = pd.read_csv(i)
     return toret
 
 
@@ -402,7 +403,7 @@ def doModel(X, WINDOW, TSTEP):
 
 
 def main():
-    for otype in ['put', 'call']:
+    for otype in ['call']:
         WINDOW = 1000
         TSTEP = 5
         START_DATE = '20140109'
@@ -686,10 +687,122 @@ def lprocess_data(dfs, otype):
     return res
 
 
+def MSSVI(params, XK, TY):
+    alpha = params[0]
+    beta = params[1]
+    mu = params[2]
+    rho = params[3]
+    nu = params[4]
+    res = list()
+    for i in range(TY.shape[0]):
+        ty = TY[i][0]
+        theta = (mu + alpha * (1-np.exp(-beta*ty)))**2
+        phi = nu/(theta**0.5)
+        k = XK[i]
+        result = (0.5 * theta) * (1 + rho * phi * k +
+                                  np.sqrt((phi * k + rho)**2 +
+                                          1 - rho**2))
+        result = np.sqrt(result/ty)*100
+        res.append(result)
+    # XXX: This should be a 2D array
+    return np.array(res)
+
+
+def main_raw(dfs, otype, ff='./thetaFits.json'):
+    def ssvi(params, theta, t, k):
+        rho = params[0]
+        nu = params[1]
+        phi = nu / (theta**0.5)  # power law
+        result = (0.5 * theta) * (1 + rho * phi * k +
+                                  np.sqrt((phi * k + rho)**2 +
+                                          1 - rho**2))
+        # XXX: Giving back the "IV" slice at "t"
+        return np.sqrt(result/t)
+
+    def ssvi_plot(all_params):
+        # XXX: This is just for plotting
+        K = np.linspace(-1.5, 1.5, 100)
+        T = np.array([i/365 for i in range(14, 730)])
+        XK, YT = np.meshgrid(K, T, indexing='xy')
+        # XXX: Don't include the date param in there
+        Z = MSSVI(all_params[:-1], XK, YT)
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        ax.plot_surface(XK, YT, Z, antialiased=False, linewidth=0,
+                        cmap='viridis')
+        ax.view_init(elev=27, azim=-129)
+        ax.set_zlabel('IV (%)')
+        ax.set_xlabel('Log moneyness')
+        ax.set_ylabel('Term structure')
+        plt.show()
+        plt.close(fig)
+
+    def fitssvi(alpha, beta, mu, taus, df, date):
+        def obj(params, taus, df, alpha, beta, mu):
+            pY = list()
+            Y = list()
+            for T in taus:
+                dfw = df[df['tau'] == T][['m', 'IV']]
+                theta = (mu + alpha*(1-np.exp(-beta*T)))**2
+                Y.append(dfw['IV'])
+                pY.append(ssvi(params, theta, T, np.log(dfw['m'].values)))
+            # [print(i.shape) for i in Y]
+            # [print(i.shape) for i in pY]
+            # XXX: Now do a sum of square differences
+            h1 = np.array([j for i in Y for j in i])
+            h2 = np.array([j for i in pY for j in i])
+            return np.sum((h1 - h2)**2)
+
+        print('Doing: ', date)
+        # XXX: Tenors to consider
+        df = df[(df['Type'] == otype) & (df['tau'] >= 14/365) &
+                (df['tau'] <= 2)]
+        # XXX: Moneyness to consider
+        df = df[(df['m'] >= 0.8) & (df['m'] <= 1.2) & (df['Volume'] > 1)]
+        res = minimize(
+            obj,
+            x0=[0.4, 0.1],
+            args=(taus, df, alpha, beta, mu),
+            bounds=[(-1+1e-6, 1-1e-6), (0+1e-6, np.inf)],
+            method='COBYQA',
+            options={'disp': False, 'maxiter': 100000}
+        )
+        if res.success:
+            # XXX: Now we can plot the real result vis-a-vis the predicted
+            # result
+            rho = res.x[0]
+            nu = res.x[1]
+            all_params = [alpha, beta, mu, rho, nu, date]
+            # XXX: We can call plot here if we want
+            return all_params
+
+    # XXX: Read the data that you need from the fitted svi_raw
+    data = mpu.io.read(ff)
+    res = Parallel(n_jobs=-1)(delayed(fitssvi)(
+        d['alpha'][0],
+        d['beta'][0],
+        d['mu'][0],
+        d['tau'][0],
+        dfs[d['date'][0]],
+        d['date'][0]
+    ) for d in data)
+    res = np.array(res)
+    res = pd.DataFrame(data=res, columns=['alpha', 'beta', 'mu', 'rho', 'nu',
+                                          'date'])
+    res.to_csv('./ssvi_params.csv')
+
+
 if __name__ == '__main__':
     # XXX: Read the real world data
     dfs = load_real_data()
-    thetaFits = lprocess_data(dfs, 'call')
-    import mpu
-    mpu.io.write('/tmp/thetaFits.json', thetaFits)
+
+    # XXX: Create the required theta_t curves (takes a day on 28 cores)
+    # thetaFits = lprocess_data(dfs, 'call')
+    # mpu.io.write('/tmp/thetaFits.json', thetaFits)
+
+    # XXX: Fit the raw SSVI parameters for each day
+    # XXX: This is pretty fast
+    main_raw(dfs, 'call')
+
+    # XXX: Predict the next day SSVI parameters
     # main()
