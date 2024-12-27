@@ -708,7 +708,7 @@ def MSSVI(params, XK, TY):
     return np.array(res)
 
 
-def main_raw(dfs, otype, ff='./thetaFits.json'):
+def main_raw(dfs, otype, ff='./thetaFits_SPX_call.json'):
     def ssvi(params, theta, t, k):
         rho = params[0]
         nu = params[1]
@@ -778,6 +778,7 @@ def main_raw(dfs, otype, ff='./thetaFits.json'):
 
     # XXX: Read the data that you need from the fitted svi_raw
     data = mpu.io.read(ff)
+    instr = list(dfs.values())[0]['UnderlyingSymbol'][0]+'_'+otype
     res = Parallel(n_jobs=-1)(delayed(fitssvi)(
         d['alpha'][0],
         d['beta'][0],
@@ -789,12 +790,97 @@ def main_raw(dfs, otype, ff='./thetaFits.json'):
     res = np.array(res)
     res = pd.DataFrame(data=res, columns=['alpha', 'beta', 'mu', 'rho', 'nu',
                                           'date'])
-    res.to_csv('./ssvi_params.csv')
+    res.to_csv('./ssvi_params_%s.csv' % instr)
+
+
+def ssvi_parm_explore(ff='./ssvi_params_SPX_call.csv'):
+
+    def vecm_fits(df, ORDER_CRITERION='aic', TRAIN_SAMPLE=2000):
+        from statsmodels.tsa.vector_ar.vecm import select_coint_rank
+        from statsmodels.tsa.vector_ar.vecm import VECM
+        from statsmodels.tsa.vector_ar.vecm import select_order
+        vecm_order = select_order(df.iloc[:TRAIN_SAMPLE, :], maxlags=100)
+        assert (vecm_order.vecm)    # make sure this is vecm model
+        vecm_nlags = vecm_order.selected_orders[ORDER_CRITERION]
+        print('vecm lags: ', vecm_nlags)
+        coint_rank = select_coint_rank(df, det_order=0,
+                                       k_ar_diff=vecm_nlags,
+                                       signif=0.01,
+                                       method='maxeig')
+        print('Co-integration rank @ 1% significance: ', coint_rank.rank)
+        vecm_model = VECM(df.iloc[:TRAIN_SAMPLE, :],
+                          k_ar_diff=vecm_nlags,
+                          coint_rank=coint_rank.rank)
+        vecm_res = vecm_model.fit()
+        print(vecm_res.summary())
+        print(vecm_res.test_normality().summary())
+        print(vecm_res.test_whiteness(nlags=vecm_nlags+1).summary())
+
+    def var_fits(df, ORDER_CRITERION='aic', TRAIN_SAMPLE=2000):
+        df = df.iloc[:TRAIN_SAMPLE, :]
+        # XXX: Are they all stationary?
+        from statsmodels.tsa.stattools import adfuller
+        adf, pval, _, _, cv, _ = adfuller(df['alpha'])
+        assert (pval <= 0.05)
+        adf, pval, _, _, cv, _ = adfuller(df['beta'])
+        assert (pval <= 0.05)
+        adf, pval, _, _, cv, _ = adfuller(df['mu'])
+        assert (pval <= 0.05)
+        adf, pval, _, _, cv, _ = adfuller(df['rho'])
+        assert (pval <= 0.05)
+        adf, pval, _, _, cv, _ = adfuller(df['nu'])
+        assert (pval <= 0.05)
+
+        from statsmodels.tsa.vector_ar.var_model import VAR
+        var_model = VAR(df)
+        var_nlags = var_model.select_order(
+            maxlags=100, trend='c').selected_orders[ORDER_CRITERION]
+        var_model_res = var_model.fit(maxlags=100,
+                                      ic=ORDER_CRITERION, trend='c')
+        print(var_model_res.summary())
+        print(var_model_res.test_normality().summary())
+        print(var_model_res.test_whiteness(nlags=var_nlags+1).summary())
+
+        # XXX: Is the model stable?
+        print(var_model_res.is_stable())
+
+        # XXX: Plot the auto correlation
+        # var_model_res.plot_acorr(nlags=var_nlags+1)
+        # plt.show()
+
+        # XXX: Get the residuals and do het_arch test
+        resids = var_model_res.resid
+        print(resids.shape)
+        # XXX: Fix this:
+        # https://stats.stackexchange.com/questions/153017/how-should-i-test-for-multivariate-arch-effects-in-r
+        from statsmodels.stats.diagnostic import het_arch
+        params = ['alpha', 'beta', 'mu', 'rho', 'nu']
+        for i in range(resids.shape[1]):
+            lm, lmpval, fval, fpval = het_arch(resids.iloc[:, i],
+                                               nlags=var_nlags+1,
+                                               ddof=var_nlags)
+            print('Het test ', params[i], ': ', lm, lmpval, fval, fpval)
+
+    import warnings
+    from statsmodels.tools.sm_exceptions import ValueWarning
+    warnings.filterwarnings(action='ignore', category=ValueWarning)
+    df = pd.read_csv(ff)
+    df = df[['date', 'alpha', 'beta', 'mu', 'rho', 'nu']]
+    df.index = pd.to_datetime(df['date'], format='%Y%m%d')
+    df = df.drop('date', axis=1)
+
+    # XXX: General descriptive statistics (Normally distributed?)
+    from statsmodels.stats.descriptivestats import Description
+    dd = Description(df)
+    print(dd.summary())
+
+    # XXX: Fit the var model
+    var_fits(df, ORDER_CRITERION='aic')
 
 
 if __name__ == '__main__':
     # XXX: Read the real world data
-    dfs = load_real_data()
+    # dfs = load_real_data()
 
     # XXX: Create the required theta_t curves (takes a day on 28 cores)
     # thetaFits = lprocess_data(dfs, 'call')
@@ -802,7 +888,10 @@ if __name__ == '__main__':
 
     # XXX: Fit the raw SSVI parameters for each day
     # XXX: This is pretty fast
-    main_raw(dfs, 'call')
+    # main_raw(dfs, 'call')
+
+    # XXX: Explore the parameters of SSVI fit
+    ssvi_parm_explore()
 
     # XXX: Predict the next day SSVI parameters
     # main()
