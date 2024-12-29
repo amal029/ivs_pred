@@ -56,14 +56,14 @@ def param_summary(params):
     plt.show(block=False)
 
 
-def pacount(x, BREAK=0.1, var=False):
+def pacount(x, BREAK=0.1, var=False, nlags=10, diff=True):
     import numpy as np
     from statsmodels.tsa.stattools import pacf, acf
-    xd = np.diff(x)
+    xd = np.diff(x) if diff else x
     if not var:
-        pa = pacf(xd, nlags=10)
+        pa = pacf(xd, nlags=nlags)
     else:
-        pa = pacf(xd**2, nlags=10)
+        pa = pacf(xd**2, nlags=nlags)
     pcount = 0
     for i in pa[1:]:
         if np.abs(i) < BREAK:
@@ -71,9 +71,9 @@ def pacount(x, BREAK=0.1, var=False):
         pcount += 1
 
     if not var:
-        aa = acf(xd, nlags=10)
+        aa = acf(xd, nlags=nlags)
     else:
-        aa = acf(xd**2, nlags=10)
+        aa = acf(xd**2, nlags=nlags)
     acount = 0
     for i in aa[1:]:
         if np.abs(i) < BREAK:
@@ -772,7 +772,8 @@ def main_raw(dfs, otype, ff='./thetaFits_SPX_call.json'):
             # result
             rho = res.x[0]
             nu = res.x[1]
-            all_params = [alpha, beta, mu, rho, nu, date]
+            all_params = [alpha, beta, mu, rho, nu,
+                          pd.to_datetime(date, format='%Y%m%d')]
             # XXX: We can call plot here if we want
             return all_params
 
@@ -795,6 +796,52 @@ def main_raw(dfs, otype, ff='./thetaFits_SPX_call.json'):
 
 def ssvi_parm_explore(ff='./ssvi_params_SPX_call.csv'):
 
+    def sarimax_fit(df, TRAIN_SAMPLE=2000):
+        df = df.iloc[: TRAIN_SAMPLE, :]
+        # XXX: Always use the differenced series, because of
+        # optimisation failure.
+        df = df.diff().dropna()
+
+        stationarity(df)        # check if series is stationary
+
+        # XXX: This is the order for diff series from acf and pacf
+        from statsmodels.tsa.statespace.sarimax import SARIMAX
+        for i in range(df.shape[1]):
+            Y = df[df.columns[i]]
+            arc, mac = pacount(Y, nlags=100, diff=False)
+            model = SARIMAX(endog=Y, order=(arc, 0, mac))
+            model_res = model.fit(disp=False, method='nm',
+                                  maxiter=1000000)
+            print(model_res.summary())
+
+            # XXX: Fit the residuals for hetroscadicity
+            from arch.univariate import ZeroMean, GARCH, StudentsT
+            # XXX: AR on differenced series
+            # rp, ra = pacount(Y, BREAK=0.1, var=True, diff=False)
+            # rp = 1 if rp <= 0 else rp
+            # ra = 1 if ra <= 0 else ra
+            vol_model = GARCH(p=1, q=1)
+            model_res = ZeroMean(model_res.resid, volatility=vol_model,
+                                 rescale=False, distribution=StudentsT())
+            model_res = model_res.fit(update_freq=0, disp='off',
+                                      options={'maxiter': 10000})
+            assert (model_res.optimization_result.success)
+            print(model_res.summary())
+            # SCALE = model_res.scale
+
+            from statsmodels.stats.diagnostic import het_arch
+            lm, lmpval, fval, fpval = het_arch(model_res.std_resid,
+                                               ddof=(arc+mac))
+            # XXX: No hetroscadicity left in the model
+            assert (lmpval > 0.05)
+            assert (fpval > 0.05)
+            print('%s het_arch test: lm:%s,lmpval:%s,fval:%s,fpval:%s' %
+                  (df.columns[i], lm, lmpval, fval, fpval))
+            from statsmodels.stats.stattools import jarque_bera
+            jb, jbp, skew, kur = jarque_bera(model_res.std_resid)
+            print('JB stat:%s, JBp-val:%s, skew:%s, kurtosis:%s' %
+                  (jb, jbp, skew, kur))
+
     def vecm_fits(df, ORDER_CRITERION='aic', TRAIN_SAMPLE=2000):
         from statsmodels.tsa.vector_ar.vecm import select_coint_rank
         from statsmodels.tsa.vector_ar.vecm import VECM
@@ -816,8 +863,7 @@ def ssvi_parm_explore(ff='./ssvi_params_SPX_call.csv'):
         print(vecm_res.test_normality().summary())
         print(vecm_res.test_whiteness(nlags=vecm_nlags+1).summary())
 
-    def var_fits(df, ORDER_CRITERION='aic', TRAIN_SAMPLE=2000):
-        df = df.iloc[:TRAIN_SAMPLE, :]
+    def stationarity(df):
         # XXX: Are they all stationary?
         from statsmodels.tsa.stattools import adfuller
         adf, pval, _, _, cv, _ = adfuller(df['alpha'])
@@ -831,6 +877,12 @@ def ssvi_parm_explore(ff='./ssvi_params_SPX_call.csv'):
         adf, pval, _, _, cv, _ = adfuller(df['nu'])
         assert (pval <= 0.05)
 
+    def var_fits(df, ORDER_CRITERION='aic', TRAIN_SAMPLE=2000):
+        df = df.iloc[:TRAIN_SAMPLE, :]  # Samples to test
+
+        stationarity(df)        # First always check for stationarity
+
+        # XXX: Then fit the model
         from statsmodels.tsa.vector_ar.var_model import VAR
         var_model = VAR(df)
         var_nlags = var_model.select_order(
@@ -874,13 +926,16 @@ def ssvi_parm_explore(ff='./ssvi_params_SPX_call.csv'):
     dd = Description(df)
     print(dd.summary())
 
+    # XXX: Fit the SARIMAX model
+    sarimax_fit(df)
+
     # XXX: Fit the var model
-    var_fits(df, ORDER_CRITERION='aic')
+    # var_fits(df, ORDER_CRITERION='aic')
 
 
 if __name__ == '__main__':
     # XXX: Read the real world data
-    # dfs = load_real_data()
+    dfs = load_real_data()
 
     # XXX: Create the required theta_t curves (takes a day on 28 cores)
     # thetaFits = lprocess_data(dfs, 'call')
@@ -888,10 +943,10 @@ if __name__ == '__main__':
 
     # XXX: Fit the raw SSVI parameters for each day
     # XXX: This is pretty fast
-    # main_raw(dfs, 'call')
+    main_raw(dfs, 'call')
 
     # XXX: Explore the parameters of SSVI fit
-    ssvi_parm_explore()
+    # ssvi_parm_explore()
 
     # XXX: Predict the next day SSVI parameters
     # main()
