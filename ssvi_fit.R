@@ -88,10 +88,14 @@ arifma_garch <- function() {
   
   metrics(alpha.actual, alpha.predicted, beta.actual, beta.predicted, 
           mu.actual, mu.predicted, rho.actual, rho.predicted, nu.actual, nu.predicted)
+  df = (data.frame("alpha" = alpha.predicted, "beta" = beta.predicted, 
+        "mu" = mu.predicted, "rho" = rho.predicted, "nu" = nu.predicted))
+  colnames(df) = c("alpha", "beta", "mu", "rho", "nu")
+  return(df)
 }
 
 # Now we predict using mutivariate VAR + DCC
-var_dcc <- function(){
+var_dcc <- function(PLAGS=2){
   # Load the data
   ssvi_params_SPX_call = read.csv("ssvi_params_SPX_call.csv")
   # There has to be a better way of doing this.
@@ -116,27 +120,16 @@ var_dcc <- function(){
   nu.spec = ugarchspec(mean.model = list(armaOrder = c(2,2), include.mean=FALSE), 
                        distribution.model = "std", variance.model = list(garchOrder = c(1,1)))
 
-  # This is the number of lags to be used in the VAR model
-  PLAGS = 3
-  
   # Fit a var object outside
   var_fit <- varxfit(u[1:(total.size-out.sample),], p = PLAGS, postpad = "constant")
-  print(paste("var_fit residual length: ", length(var_fit$xresiduals)))
   ahead = 1
   var_mu_forecast <- varxforecast(u[1:total.size,], var_fit$Bcoef, p = PLAGS, out.sample = out.sample,
                                   n.ahead = ahead, n.roll = out.sample-ahead, mregfor = NULL)
-  alpha.predicted = var_mu_forecast[,1,]
   alpha.actual = u$alpha[(total.size-out.sample+1):(total.size)]
-  beta.predicted = var_mu_forecast[,2,]
   beta.actual = u$beta[(total.size-out.sample+1):(total.size)]
-  mu.predicted = var_mu_forecast[,3,]
   mu.actual = u$mu[(total.size-out.sample+1):(total.size)]
-  rho.predicted = var_mu_forecast[,4,]
   rho.actual = u$rho[(total.size-out.sample+1):(total.size)]
-  nu.predicted = var_mu_forecast[,5,]
   nu.actual = u$nu[(total.size-out.sample+1):(total.size)]
-  metrics(alpha.actual, alpha.predicted, beta.actual, beta.predicted, 
-          mu.actual, mu.predicted, rho.actual, rho.predicted, nu.actual, nu.predicted)
   
   # Make the multispec
   mspec = rugarch::multispec(c(spec, spec, spec, rho.spec, nu.spec))
@@ -146,9 +139,33 @@ var_dcc <- function(){
   # var_dcc <- dccspec(mspec, VAR = FALSE, dccOrder = c(1, 1), model = "DCC", distribution = "mvt")
   var_dcc_fit <- dccfit(var_dcc, u[1:total.size,], out.sample = out.sample, solver="nlminb",
                         VAR.fit = var_fit)
-  var_dcc_fit
   var_dcc_forecast <- dccforecast(var_dcc_fit, n.ahead = ahead, n.roll = out.sample-ahead)
+  alpha.predicted.mean = fitted(var_dcc_forecast)[,"alpha",]
+  alpha.predicted.var = sigma(var_dcc_forecast)[,"alpha",]
+  beta.predicted.mean = fitted(var_dcc_forecast)[,"beta",]
+  beta.predicted.var = sigma(var_dcc_forecast)[,"beta",]
+  mu.predicted.mean = fitted(var_dcc_forecast)[,"mu",]
+  mu.predicted.var = sigma(var_dcc_forecast)[,"mu",]
+  rho.predicted.mean = fitted(var_dcc_forecast)[,"rho",]
+  rho.predicted.var = sigma(var_dcc_forecast)[,"rho",]
+  nu.predicted.mean = fitted(var_dcc_forecast)[,"nu",]
+  nu.predicted.var = sigma(var_dcc_forecast)[,"nu",]
+  metrics(alpha.actual, alpha.predicted.mean, beta.actual, beta.predicted.mean, 
+          mu.actual, mu.predicted.mean, rho.actual, rho.predicted.mean, nu.actual, nu.predicted.mean)
+  
+  means = t(fitted(var_dcc_forecast)[,,]) # The means
+  vars = sqrt(t((sigma(var_dcc_forecast))[,,])) # The std-dev of t-dist
+
+  # The name of the shape parameters
+  names = c("[alpha].shape", "[beta].shape", "[mu].shape", "[rho].shape", "[nu].shape")
+  shapes = t(as.numeric(coef(var_dcc_fit)[names])) # Get the shape of the t dist
+  colnames(shapes) = colnames(means)
+  return(list(means = means, vars = vars, shapes = shapes))
 }
 
-# arifma_garch()
-var_dcc()
+arifmameans = arifma_garch()
+varmvs = var_dcc(PLAGS=3)
+
+# Write the outputs
+write.csv(arifmameans, "R_arifma_garch_res.csv")
+write.csv(varmvs, "R_var_garch_dcc_res.csv")
