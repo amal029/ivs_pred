@@ -6,7 +6,7 @@ import pandas as pd
 from pred import SSVI
 import matplotlib.pyplot as plt
 # from statsmodels.stats.diagnostic import het_arch
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import Ridge, RidgeCV
 from xgboost import XGBRegressor
 from sklearn.metrics import r2_score
 from joblib import Parallel, delayed
@@ -793,149 +793,124 @@ def main_raw(dfs, otype, ff='./thetaFits_SPX_call.json'):
                                           'date'])
     res.to_csv('./ssvi_params_%s.csv' % instr)
 
-
-def ssvi_parm_explore(ff='./ssvi_params_SPX_call.csv'):
-
-    def sarimax_fit(df, TRAIN_SAMPLE=2000):
-        df = df.iloc[: TRAIN_SAMPLE, :]
-        # XXX: Always use the differenced series, because of
-        # optimisation failure.
-        df = df.diff().dropna()
-
-        stationarity(df)        # check if series is stationary
-
-        # XXX: This is the order for diff series from acf and pacf
-        from statsmodels.tsa.statespace.sarimax import SARIMAX
-        for i in range(df.shape[1]):
-            Y = df[df.columns[i]]
-            arc, mac = pacount(Y, nlags=100, diff=False)
-            model = SARIMAX(endog=Y, order=(arc, 0, mac))
-            model_res = model.fit(disp=False, method='nm',
-                                  maxiter=1000000)
-            print(model_res.summary())
-
-            # XXX: Fit the residuals for hetroscadicity
-            from arch.univariate import ZeroMean, GARCH, StudentsT
-            # XXX: AR on differenced series
-            # rp, ra = pacount(Y, BREAK=0.1, var=True, diff=False)
-            # rp = 1 if rp <= 0 else rp
-            # ra = 1 if ra <= 0 else ra
-            vol_model = GARCH(p=1, q=1)
-            model_res = ZeroMean(model_res.resid, volatility=vol_model,
-                                 rescale=False, distribution=StudentsT())
-            model_res = model_res.fit(update_freq=0, disp='off',
-                                      options={'maxiter': 10000})
-            assert (model_res.optimization_result.success)
-            print(model_res.summary())
-            # SCALE = model_res.scale
-
-            from statsmodels.stats.diagnostic import het_arch
-            lm, lmpval, fval, fpval = het_arch(model_res.std_resid,
-                                               ddof=(arc+mac))
-            # XXX: No hetroscadicity left in the model
-            assert (lmpval > 0.05)
-            assert (fpval > 0.05)
-            print('%s het_arch test: lm:%s,lmpval:%s,fval:%s,fpval:%s' %
-                  (df.columns[i], lm, lmpval, fval, fpval))
-            from statsmodels.stats.stattools import jarque_bera
-            jb, jbp, skew, kur = jarque_bera(model_res.std_resid)
-            print('JB stat:%s, JBp-val:%s, skew:%s, kurtosis:%s' %
-                  (jb, jbp, skew, kur))
-
-    def vecm_fits(df, ORDER_CRITERION='aic', TRAIN_SAMPLE=2000):
-        from statsmodels.tsa.vector_ar.vecm import select_coint_rank
-        from statsmodels.tsa.vector_ar.vecm import VECM
-        from statsmodels.tsa.vector_ar.vecm import select_order
-        vecm_order = select_order(df.iloc[:TRAIN_SAMPLE, :], maxlags=100)
-        assert (vecm_order.vecm)    # make sure this is vecm model
-        vecm_nlags = vecm_order.selected_orders[ORDER_CRITERION]
-        print('vecm lags: ', vecm_nlags)
-        coint_rank = select_coint_rank(df, det_order=0,
-                                       k_ar_diff=vecm_nlags,
-                                       signif=0.01,
-                                       method='maxeig')
-        print('Co-integration rank @ 1% significance: ', coint_rank.rank)
-        vecm_model = VECM(df.iloc[:TRAIN_SAMPLE, :],
-                          k_ar_diff=vecm_nlags,
-                          coint_rank=coint_rank.rank)
-        vecm_res = vecm_model.fit()
-        print(vecm_res.summary())
-        print(vecm_res.test_normality().summary())
-        print(vecm_res.test_whiteness(nlags=vecm_nlags+1).summary())
-
-    def stationarity(df):
-        # XXX: Are they all stationary?
-        from statsmodels.tsa.stattools import adfuller
-        adf, pval, _, _, cv, _ = adfuller(df['alpha'])
-        assert (pval <= 0.05)
-        adf, pval, _, _, cv, _ = adfuller(df['beta'])
-        assert (pval <= 0.05)
-        adf, pval, _, _, cv, _ = adfuller(df['mu'])
-        assert (pval <= 0.05)
-        adf, pval, _, _, cv, _ = adfuller(df['rho'])
-        assert (pval <= 0.05)
-        adf, pval, _, _, cv, _ = adfuller(df['nu'])
-        assert (pval <= 0.05)
-
-    def var_fits(df, ORDER_CRITERION='aic', TRAIN_SAMPLE=2000):
-        df = df.iloc[:TRAIN_SAMPLE, :]  # Samples to test
-
-        stationarity(df)        # First always check for stationarity
-
-        # XXX: Then fit the model
-        from statsmodels.tsa.vector_ar.var_model import VAR
-        var_model = VAR(df)
-        var_nlags = var_model.select_order(
-            maxlags=100, trend='c').selected_orders[ORDER_CRITERION]
-        var_model_res = var_model.fit(maxlags=100,
-                                      ic=ORDER_CRITERION, trend='c')
-        print(var_model_res.summary())
-        print(var_model_res.test_normality().summary())
-        print(var_model_res.test_whiteness(nlags=var_nlags+1).summary())
-
-        # XXX: Is the model stable?
-        print(var_model_res.is_stable())
-
-        # XXX: Plot the auto correlation
-        # var_model_res.plot_acorr(nlags=var_nlags+1)
-        # plt.show()
-
-        # XXX: Get the residuals and do het_arch test
-        resids = var_model_res.resid
-        print(resids.shape)
-        # XXX: Fix this:
-        # https://stats.stackexchange.com/questions/153017/how-should-i-test-for-multivariate-arch-effects-in-r
-        from statsmodels.stats.diagnostic import het_arch
-        params = ['alpha', 'beta', 'mu', 'rho', 'nu']
-        for i in range(resids.shape[1]):
-            lm, lmpval, fval, fpval = het_arch(resids.iloc[:, i],
-                                               nlags=var_nlags+1,
-                                               ddof=var_nlags)
-            print('Het test ', params[i], ': ', lm, lmpval, fval, fpval)
-
-    import warnings
-    from statsmodels.tools.sm_exceptions import ValueWarning
-    warnings.filterwarnings(action='ignore', category=ValueWarning)
-    df = pd.read_csv(ff)
-    df = df[['date', 'alpha', 'beta', 'mu', 'rho', 'nu']]
-    df.index = pd.to_datetime(df['date'], format='%Y%m%d')
-    df = df.drop('date', axis=1)
-
-    # XXX: General descriptive statistics (Normally distributed?)
-    from statsmodels.stats.descriptivestats import Description
-    dd = Description(df)
-    print(dd.summary())
-
-    # XXX: Fit the SARIMAX model
-    sarimax_fit(df)
-
     # XXX: Fit the var model
     # var_fits(df, ORDER_CRITERION='aic')
 
 
+def build_samples(df, lag):
+    train_sample = df.shape[0]
+    samples = list()
+    response = list()
+    assert (train_sample - lag > 0)
+    for i in range(train_sample-lag):
+        samples.append(df.iloc[i:lag+i].values)
+        response.append(df.iloc[lag+i].values)
+
+    samples = np.array(samples)
+    response = np.array(response)
+    return samples, response
+
+
+def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000):
+    def scores(Y, YP, insample=True):
+        if insample:
+            print('****************In sample scores********************')
+        else:
+            print('****************Out sample scores********************')
+        print('alpha r2 score: ', r2_score(Y['alpha'], YP['alpha']))
+        print('beta r2 score: ', r2_score(Y['beta'], YP['beta']))
+        print('mu r2 score: ', r2_score(Y['mu'], YP['mu']))
+        print('rho r2 score: ', r2_score(Y['rho'], YP['rho']))
+        print('nu r2 score: ', r2_score(Y['nu'], YP['nu']))
+
+        # alphas = pd.DataFrame({'alpha': Y['alpha'].values,
+        #                        'palpha': YP['alpha'].values})
+        # betas = pd.DataFrame({'beta': Y['beta'].values,
+        #                       'pbeta': YP['beta'].values})
+        # mus = pd.DataFrame({'mu': Y['mu'].values,
+        #                     'pmu': YP['mu'].values})
+        # rhos = pd.DataFrame({'rho': Y['rho'].values,
+        #                      'prho': YP['rho'].values})
+        # nus = pd.DataFrame({'nu': Y['nu'].values,
+        #                     'pnu': YP['nu'].values})
+
+    def ar_fit_ridge_xgboost(X, Y, response, dates):
+        pass
+
+    def var_fit_ridge_xgboost(X, Y, response, dates):
+        X = X.reshape(X.shape[0], X.shape[1]*X.shape[2])  # flattned for Ridge
+        # XXX: Fit a RidgeCV model
+        alphas = np.array([0.1, 0.5, 1, 2, 5, 10])
+        # XXX: Uses 5 fold Cross-validation for Ridge regression
+        ridge = RidgeCV(alphas, scoring='neg_mean_squared_error',
+                        cv=5).fit(X, Y)
+        YP = pd.DataFrame(ridge.predict(X), columns=colnames[:-1])
+        YP['date'] = dates
+        response = pd.DataFrame(response, columns=colnames)
+        print('-------------------Ridge CV-------------------')
+        scores(response, YP)               # in sample scores
+
+        # XXX: Testing out of samples -- Ridge regression
+        df_test = df[colnames][train_sample-LAGS[0]-1:]  # the -1 is needed
+        testX, responseY = build_samples(df_test, LAGS[0])
+        testX = testX[:, :, :-1]
+        testX = testX.reshape(testX.shape[0], testX.shape[1]*testX.shape[2])
+        testYP = pd.DataFrame(ridge.predict(testX), columns=colnames[:-1])
+        testYP['date'] = responseY[:, -1]
+        testY = pd.DataFrame(responseY, columns=colnames)
+        scores(testY, testYP, insample=False)   # out of sample scores
+
+        print('-------------------XGBoost-------------------')
+        # XXX: This is XGBRegressor
+        alpha_model = XGBRegressor(n_jobs=-1,
+                                   booster='gblinear',
+                                   reg_alpha=10).fit(X, Y[:, 0])  # alpha
+        beta_model = XGBRegressor(n_jobs=-1,
+                                  booster='gblinear',
+                                  reg_lambda=0,
+                                  reg_alpha=0).fit(X, Y[:, 1])  # beta
+        mu_model = XGBRegressor(n_jobs=-1,
+                                booster='gblinear').fit(X, Y[:, 2])  # mu
+        rho_model = XGBRegressor(n_jobs=-1,
+                                 booster='gblinear',
+                                 # reg_alpha=0.001,
+                                 reg_lambda=0.001).fit(X, Y[:, 3])  # rho
+        nu_model = XGBRegressor(n_jobs=-1,
+                                booster='gblinear').fit(X, Y[:, 4])  # nu
+
+        # XXX: Predict the out of samples for all columns
+        alpha_predict = alpha_model.predict(testX)
+        beta_predict = beta_model.predict(testX)
+        mu_predict = mu_model.predict(testX)
+        rho_predict = rho_model.predict(testX)
+        nu_predict = nu_model.predict(testX)
+        testYP = pd.DataFrame({'alpha': alpha_predict, 'beta': beta_predict,
+                               'mu': mu_predict, 'rho': rho_predict,
+                               'nu': nu_predict, 'date': responseY[:, -1]})
+        scores(testY, testYP, insample=False)
+
+    colnames = ['alpha', 'beta', 'mu', 'rho', 'nu', 'date']
+    df = pd.read_csv(ff)
+    df_train = df[colnames][:train_sample]
+
+    LAGS = [5]
+    samples, response = build_samples(df_train, LAGS[0])
+
+    # XXX: Get the samples that you need
+    X = samples[:, :, :-1]  # removed the date
+    Y = response[:, :-1]   # remove the date
+    dates = response[:, -1]
+    # var_fit_ridge_xgboost(np.copy(X), np.copy(Y), np.copy(response),
+    #                       np.copy(dates))
+
+    # XXX: This is AR Ridge
+    ar_fit_ridge_xgboost(np.copy(X), np.copy(Y), np.copy(response),
+                         np.copy(dates))
+
+
 if __name__ == '__main__':
     # XXX: Read the real world data
-    dfs = load_real_data()
+    # dfs = load_real_data()
 
     # XXX: Create the required theta_t curves (takes a day on 28 cores)
     # thetaFits = lprocess_data(dfs, 'call')
@@ -943,10 +918,10 @@ if __name__ == '__main__':
 
     # XXX: Fit the raw SSVI parameters for each day
     # XXX: This is pretty fast
-    main_raw(dfs, 'call')
+    # main_raw(dfs, 'call')
 
-    # XXX: Explore the parameters of SSVI fit
-    # ssvi_parm_explore()
+    # XXX: Ridge prediction for the AR and VAR models
+    predict_ssvi_params()
 
     # XXX: Predict the next day SSVI parameters
     # main()

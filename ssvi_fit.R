@@ -1,6 +1,8 @@
 require(rugarch)
 require(rmgarch)
 require(xts)
+require(urca)
+require(vars)
 
 rm(list=ls()) # clear all variables
 
@@ -95,7 +97,7 @@ arifma_garch <- function() {
 }
 
 # Now we predict using mutivariate VAR + DCC
-var_dcc <- function(PLAGS=2){
+var_dcc <- function(PLAGS=5, ROBUST=FALSE){
   # Load the data
   ssvi_params_SPX_call = read.csv("ssvi_params_SPX_call.csv")
   # There has to be a better way of doing this.
@@ -121,7 +123,8 @@ var_dcc <- function(PLAGS=2){
                        distribution.model = "std", variance.model = list(garchOrder = c(1,1)))
 
   # Fit a var object outside
-  var_fit <- varxfit(u[1:(total.size-out.sample),], p = PLAGS, postpad = "constant")
+  var_fit <- varxfit(u[1:(total.size-out.sample),], p = PLAGS, postpad = "constant",
+                     constant = FALSE, robust = ROBUST)
   ahead = 1
   var_mu_forecast <- varxforecast(u[1:total.size,], var_fit$Bcoef, p = PLAGS, out.sample = out.sample,
                                   n.ahead = ahead, n.roll = out.sample-ahead, mregfor = NULL)
@@ -163,9 +166,39 @@ var_dcc <- function(PLAGS=2){
   return(list(means = means, vars = vars, shapes = shapes))
 }
 
-arifmameans = arifma_garch()
-varmvs = var_dcc(PLAGS=3)
+var_vecm <- function(){
+  # Load the data
+  ssvi_params_SPX_call = read.csv("ssvi_params_SPX_call.csv")
+  # There has to be a better way of doing this.
+  u <- xts(ssvi_params_SPX_call, order.by = as.POSIXct(ssvi_params_SPX_call$date))
+  u <- u[,c("alpha", "beta", "mu", "rho", "nu")]
+  u <- as.data.frame(coredata(u))
+  for (i in unique(colnames(u))) {
+    u[,i] <- as.numeric(u[,i])
+  }
+  rownames(u) <- ssvi_params_SPX_call$date
+  # Total size used to test
+  total.size = length(u$alpha)
+  # How many to keep for out of sample testing
+  out.sample = total.size - 3000 # 3000 samples for training rest for testing 
+  ca.jo.res <- ca.jo(u, type="trace", ecdet="const", K=2, spec="transitory")
+  # This confirms that we have complete co-integration, everything is stationary
+  print(summary(ca.jo.res))
+  
+  # Fit a VARS models using the VAR function
+  var.model <- VAR(u[1:(total.size-out.sample),], p=2, type="none", lag.max=100, ic="HQ")
+  print(summary(var.model))
+  normality.test(var.model)
+  var.mode.coef <- coef(var.model)
+  varcoefs = cbind(var.mode.coef$alpha[, "Estimate"], var.mode.coef$beta[, "Estimate"], var.mode.coef$mu[, "Estimate"], 
+                   var.mode.coef$rho[, "Estimate"], var.mode.coef$nu[, "Estimate"])
+}
 
+arifmameans = arifma_garch()
+varmvs = var_dcc(PLAGS=5)
 # Write the outputs
 write.csv(arifmameans, "R_arifma_garch_res.csv")
 write.csv(varmvs, "R_var_garch_dcc_res.csv")
+
+# VAR_VECM fit using a different package, just to check if everything is OK
+# var_vecm()
