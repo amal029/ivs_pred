@@ -822,6 +822,7 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000):
         print('mu r2 score: ', r2_score(Y['mu'], YP['mu']))
         print('rho r2 score: ', r2_score(Y['rho'], YP['rho']))
         print('nu r2 score: ', r2_score(Y['nu'], YP['nu']))
+        return r2_score(Y.drop(['date'], axis=1), YP.drop(['date'], axis=1))
 
         # alphas = pd.DataFrame({'alpha': Y['alpha'].values,
         #                        'palpha': YP['alpha'].values})
@@ -834,31 +835,83 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000):
         # nus = pd.DataFrame({'nu': Y['nu'].values,
         #                     'pnu': YP['nu'].values})
 
-    def ar_fit_ridge_xgboost(X, Y, response, dates):
-        pass
+    def ar_fit_ridge_xgboost(X, Y, response, dates,
+                             best: dict,
+                             lags,
+                             VARS=5,
+                             pp=False,
+                             model_name='ridge'):
 
-    def var_fit_ridge_xgboost(X, Y, response, dates):
+        def get_ars(offset, X):
+            assert (offset < 5)
+            assert (offset >= 0)
+            ii = list(range(offset, X.shape[1], 5))
+            indices = np.array([i in ii
+                                for i in
+                                range(X.shape[1])]*X.shape[0]).reshape(
+                                    X.shape[0], X.shape[1])
+            toret = X[indices]
+            toret = toret.reshape(X.shape[0], toret.shape[0]//X.shape[0])
+            return toret
+
+        names = {0: 'alpha', 1: 'beta', 2: 'mu', 3: 'rho', 4: 'nu'}
+        X = X.reshape(X.shape[0], X.shape[1]*X.shape[2])
+        alphas = np.array([0.1, 0.5, 1, 2, 5, 10])
+        if model_name == 'ridge':
+            model = RidgeCV(alphas, scoring='neg_mean_squared_error', cv=5)
+        else:
+            model = XGBRegressor(n_jobs=-1, booster='gblinear')
+        # XXX: For each get the variables and perform AR-Ridge and XGBBoost
+        if pp:
+            print('------------------AR %s------------------------' %
+                  model_name)
+        VARS = range(VARS) if type(VARS) is int else VARS
+        for i in VARS:
+            Xtrains = get_ars(i, X)
+            Ytrains = Y[:, i]
+            model = model.fit(Xtrains, Ytrains)
+            # XXX: Test the results
+            df_test = df[colnames][train_sample-lags-1:]  # the -1 is needed
+            testX, responseY = build_samples(df_test, lags)
+            testX = testX[:, :, :-1]
+            testX = testX.reshape(testX.shape[0],
+                                  testX.shape[1]*testX.shape[2])
+            testX = get_ars(i, testX)
+            testYP = model.predict(testX)
+            testYP = pd.DataFrame(testYP, columns=[colnames[i]])
+            testYP['date'] = responseY[:, -1]
+            testY = pd.DataFrame(responseY[:, i], columns=[colnames[i]])
+            testY['date'] = responseY[:, -1]
+            score = r2_score(testY[names[i]], testYP[names[i]])
+            if best[names[i]][0] < score:
+                best[names[i]] = (score, lags)
+            print('%s: %s for lags: %s' % (names[i], score, lags))
+
+    def var_fit_ridge_xgboost(X, Y, response, dates, lags,
+                              reg_score, xgboost_score):
         X = X.reshape(X.shape[0], X.shape[1]*X.shape[2])  # flattned for Ridge
         # XXX: Fit a RidgeCV model
         alphas = np.array([0.1, 0.5, 1, 2, 5, 10])
         # XXX: Uses 5 fold Cross-validation for Ridge regression
         ridge = RidgeCV(alphas, scoring='neg_mean_squared_error',
-                        cv=5).fit(X, Y)
+                        cv=5, fit_intercept=False).fit(X, Y)
         YP = pd.DataFrame(ridge.predict(X), columns=colnames[:-1])
         YP['date'] = dates
         response = pd.DataFrame(response, columns=colnames)
         print('-------------------Ridge CV-------------------')
-        scores(response, YP)               # in sample scores
+        # scores(response, YP)               # in sample scores
 
         # XXX: Testing out of samples -- Ridge regression
-        df_test = df[colnames][train_sample-LAGS[0]-1:]  # the -1 is needed
-        testX, responseY = build_samples(df_test, LAGS[0])
+        df_test = df[colnames][train_sample-lags-1:]  # the -1 is needed
+        testX, responseY = build_samples(df_test, lags)
         testX = testX[:, :, :-1]
         testX = testX.reshape(testX.shape[0], testX.shape[1]*testX.shape[2])
         testYP = pd.DataFrame(ridge.predict(testX), columns=colnames[:-1])
         testYP['date'] = responseY[:, -1]
         testY = pd.DataFrame(responseY, columns=colnames)
-        scores(testY, testYP, insample=False)   # out of sample scores
+        tscore = scores(testY, testYP, insample=False)   # out of sample scores
+        if reg_score[0] < tscore:
+            reg_score = (tscore, lags)
 
         print('-------------------XGBoost-------------------')
         # XXX: This is XGBRegressor
@@ -887,25 +940,105 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000):
         testYP = pd.DataFrame({'alpha': alpha_predict, 'beta': beta_predict,
                                'mu': mu_predict, 'rho': rho_predict,
                                'nu': nu_predict, 'date': responseY[:, -1]})
-        scores(testY, testYP, insample=False)
+        tscore = scores(testY, testYP, insample=False)
+        if xgboost_score[0] < tscore:
+            xgboost_score = (tscore, lags)
+        return reg_score, xgboost_score
+
+    def har_ssvi_fit(train_df, train_dates, test_df, har_best,
+                     VARS, LAGS=[1, 5, 21]):
+        from arch.univariate import HARX
+        train_df.index = pd.to_datetime(train_dates)
+        test_df.index = pd.to_datetime(test_df['date'])
+        test_df = test_df[train_df.columns]
+        for var in [VARS]:
+            harx_model = HARX(train_df[var], lags=LAGS, rescale=False)
+            harx_fit_res = harx_model.fit(disp='off', update_freq=0)
+            params = harx_fit_res.params[:-1].values.T  # just the mean model
+            # XXX: Now test it
+            forecast = test_df[var].rolling(LAGS[-1]).apply(
+                lambda x:
+                np.dot(params, np.array([1,
+                                         x[:LAGS[0]].mean(),
+                                         x[:LAGS[1]].mean(),
+                                         x[:LAGS[2]].mean()]))
+            ).dropna()
+            score = r2_score(test_df[var][LAGS[-1]-1:], forecast)
+            print('%s R2 score: %s' % (var, score))
+            if har_best[var][0] < score:
+                har_best[var] = (score, LAGS)
 
     colnames = ['alpha', 'beta', 'mu', 'rho', 'nu', 'date']
     df = pd.read_csv(ff)
     df_train = df[colnames][:train_sample]
 
-    LAGS = [5]
-    samples, response = build_samples(df_train, LAGS[0])
+    # XXX: HAR model fit for the parameters
+    print('----------------------------HAR--------------------')
+    L2 = list(range(2, 5))
+    L3 = list(range(5, 30))
+    har_best = {i: (-np.inf, []) for i in colnames[:-1]}
+    for l2 in L2:
+        for l3 in L3:
+            LAGS = [1, l2, l3]
+            for v in har_best.keys():
+                print('Doing %s with lags %s' % (v, LAGS))
+                har_ssvi_fit(df_train[colnames[:-1]], df_train['date'],
+                             df.iloc[train_sample-LAGS[-1]:], LAGS=LAGS,
+                             har_best=har_best, VARS=v)
+    print(har_best)
 
-    # XXX: Get the samples that you need
-    X = samples[:, :, :-1]  # removed the date
-    Y = response[:, :-1]   # remove the date
-    dates = response[:, -1]
-    # var_fit_ridge_xgboost(np.copy(X), np.copy(Y), np.copy(response),
-    #                       np.copy(dates))
+    # XXX: Grid search for VAR models with Ridge and XGBoost
+    ridge_score = (-np.inf, -1)
+    xgboost_score = (-np.inf, -1)
+    for i in range(1, 40):
+        # LAGS = [i]
+        samples, response = build_samples(df_train, i)
 
-    # XXX: This is AR Ridge
-    ar_fit_ridge_xgboost(np.copy(X), np.copy(Y), np.copy(response),
-                         np.copy(dates))
+        # XXX: Get the samples that you need
+        X = samples[:, :, :-1]  # removed the date
+        Y = response[:, :-1]   # remove the date
+        dates = response[:, -1]
+        ridge_score, xgboost_score = var_fit_ridge_xgboost(np.copy(X),
+                                                           np.copy(Y),
+                                                           np.copy(response),
+                                                           np.copy(dates),
+                                                           i,
+                                                           ridge_score,
+                                                           xgboost_score)
+
+    # XXX: Performing grid search for lags in AR with Ridge and XGBoost
+    best_ridge = {i: (-np.inf, 0) for i in colnames[:-1]}
+    best_xgboost = {i: (-np.inf, 0) for i in colnames[:-1]}
+    print("Grid CV for best lag")
+    for i in range(1, 40):
+        # LAGS = [i]
+        samples, response = build_samples(df_train, i)
+
+        # XXX: Get the samples that you need
+        X = samples[:, :, :-1]  # removed the date
+        Y = response[:, :-1]   # remove the date
+        dates = response[:, -1]
+
+        for v in [[0], [1], [2], [3], [4]]:
+            # XXX: This is AR Ridge
+            ar_fit_ridge_xgboost(np.copy(X), np.copy(Y),
+                                 np.copy(response),
+                                 np.copy(dates), best_ridge, i,
+                                 VARS=v,
+                                 pp=True,
+                                 model_name='ridge')
+            # XXX: This is the XGboost
+            ar_fit_ridge_xgboost(np.copy(X), np.copy(Y),
+                                 np.copy(response),
+                                 np.copy(dates), best_xgboost, i,
+                                 pp=True,
+                                 VARS=v,
+                                 model_name='xgboost')
+    # XXX: The best models
+    print('VAR Ridge best (score, lags): ', ridge_score)
+    print('VAR XGBBoost best (score, lags): ', xgboost_score)
+    print('Best lags for AR-Ridge: ', best_ridge)
+    print('Best lags for AR-XGBBoost: ', best_xgboost)
 
 
 if __name__ == '__main__':
