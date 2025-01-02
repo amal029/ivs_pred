@@ -976,7 +976,6 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
         model = SARIMAX(train_df, order=ORDER, trend='n')
         mres = model.fit(method='nm', maxiter=1000000,
                          disp=False, return_params=False)
-        # print(mres.summary())
         arparams = mres.arparams[::-1]
         maparams = mres.maparams[::-1]
         predict_resids = mres.resid
@@ -1078,16 +1077,16 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
         arma_best = {i: BARMA(score=-np.inf, lags=(0, 0, 0),
                               model=None, tForecast=None)
                      for i in colnames[:-1]}
-        for ar in [1, 2, 5, 10, 20]:
-            for ma in [0, 1, 2, 5, 10, 20]:
-                for v in arma_best.keys():
-                    df_test = df[v].iloc[train_sample:
-                                         train_sample+CV]
-                    df_test.index = df['date'].iloc[train_sample:
-                                                    train_sample+CV]
-                    df_test = df[v].iloc[train_sample-ar:train_sample-ar+CV]
-                    df_test_i = df['date'].iloc[train_sample-ar:
-                                                train_sample-ar+CV]
+        for v in arma_best.keys():
+            df_test = df[v].iloc[train_sample:
+                                 train_sample+CV]
+            df_test.index = df['date'].iloc[train_sample:
+                                            train_sample+CV]
+            for ar in range(1, 11):
+                df_test = df[v].iloc[train_sample-ar:train_sample-ar+CV]
+                df_test_i = df['date'].iloc[train_sample-ar:
+                                            train_sample-ar+CV]
+                for ma in range(0, 11):
                     arma_ssvi_fit(df_train[v], df_train['date'],
                                   df_test, df_test_i, arma_best,
                                   v, ORDER=(ar, 0, ma))
