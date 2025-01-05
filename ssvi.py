@@ -20,6 +20,7 @@ from scipy.optimize import minimize
 import mpu
 from collections import namedtuple
 from statsmodels.tsa.statespace.sarimax import SARIMAX
+from statsmodels.tsa.statespace.varmax import VARMAX
 
 
 # XXX: This function loads the real data
@@ -684,7 +685,7 @@ def lprocess_data(dfs, otype):
         return thetaFits
 
     from joblib import Parallel, delayed
-    res = Parallel(n_jobs=12)(delayed(compute)(df, k)
+    res = Parallel(n_jobs=-1)(delayed(compute)(df, k)
                               for k, df in dfs.items())
     return res
 
@@ -800,13 +801,21 @@ def main_raw(dfs, otype, ff='./thetaFits_SPX_call.json'):
 
 
 def build_samples(df, lag):
+    """Makes input and output samples (AR style) for training models
+    given dataframe df and lag L.
+
+    """
+
     train_sample = df.shape[0]
     samples = list()
     response = list()
     assert (train_sample - lag > 0)
     for i in range(train_sample-lag):
         samples.append(df.iloc[i:lag+i].values)
-        response.append(df.iloc[lag+i].values)
+        res = df.iloc[lag + i]
+        res = res.values if len(df.shape) > 1 else res
+        response.append(res)
+        # response.append(df.iloc[lag+i].values)
 
     samples = np.array(samples)
     response = np.array(response)
@@ -815,7 +824,13 @@ def build_samples(df, lag):
 
 def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
                         CV=1000, har_fit=True, var_fit=True, ar_fit=True,
-                        sarimax_fit=True, varmax_fit=True):
+                        sarimax_fit=True, varmax_fit=True,
+                        glsar_fit=True, bayesian_fit=True):
+    """Different prediction methods for predicting the parameters of
+    SSVI IV surface.
+
+    """
+
     def scores(Y, YP, insample=True):
         if insample:
             print('****************In sample scores********************')
@@ -881,17 +896,10 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
         elif model_name == 'lstm':
             assert False, print('LSTM AR not yet implemented')
         # XXX: For each get the variables and perform AR-Ridge and XGBBoost
-        # if pp:
-        #     print('------------------AR %s------------------------' %
-        #           model_name)
         VARS = range(VARS) if type(VARS) is int else VARS
         for i in VARS:
             Xtrains = get_ars(i, X)
             Ytrains = Y[:, i]
-            # print(names[i])
-            # print(Xtrains.shape, Ytrains.shape)
-            # print(Xtrains[:10])
-            # print(Ytrains[:10])
             model = model.fit(Xtrains, Ytrains)
             # XXX: Test the results
             df_test = df[colnames][train_sample-lags-1:
@@ -980,10 +988,9 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
         maparams = mres.maparams[::-1]
         predict_resids = mres.resid
         predict_resids.index = train_dates
-
-        # print(predict_resids[-10:])
-        # print(df_test[:10])
-        # print(df_test[-10:])
+        mres.plot_diagnostics()
+        plt.show()
+        assert (False)
 
         def arma_predict(df):
             assert (df.shape[0] == arparams.shape[0])
@@ -991,12 +998,8 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
             if maparams.shape[0] > 0:
                 # XXX: Add the MA components too
                 vv += np.dot(maparams, predict_resids[-maparams.shape[0]:])
-            # XXX: Add the new error to predict_resids
-            # print('TUTU: ', df.index[-1]+1)
-            # print('real value: ', df_test.loc[df.index[-1]+1])
             predict_resids.loc[len(predict_resids)] = (
                 df_test.loc[df.index[-1]+1] - vv)
-            # assert (False)
             return vv
 
         # XXX: Predict on a rolling basis
@@ -1009,12 +1012,84 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
         test_df.index = test_df_i[arparams.shape[0]:]
         score = r2_score(test_df, res)
         print(v, ' arma R2 score: ', score, 'order: ', ORDER)
-        # XXX: Perform a rolling prediction
 
         if arma_best[v][0] < score and score >= 0:
             arma_best[v] = BARMA(score, (arparams.shape[0], 0,
                                          maparams.shape[0]),
                                  mres, res)
+
+    def glsar_ssvi_fit(train_df, train_dates, test_df, test_df_i,
+                       glsar_best, v, ORDER=1):
+        from statsmodels.regression.linear_model import GLSAR
+        model = GLSAR(train_df, rho=ORDER)
+        mres = model.iterative_fit(maxiter=100000, tol=1e-8)
+        glsarparams = model.rho[::-1]
+        # const = mres.params.values[0]
+
+        def glsar_predict(df):
+            assert (df.shape[0] == glsarparams.shape[0])
+            # XXX: Check if we have to add the const?
+            vv = np.dot(glsarparams, df)
+            return vv
+
+        res = test_df[:len(test_df)-1].rolling(
+            glsarparams.shape[0]).apply(lambda x:
+                                        glsar_predict(x)).dropna()
+        test_df = test_df[glsarparams.shape[0]:]
+        assert (res.dropna().shape == df_test[glsarparams.shape[0]:].shape)
+        res.index = test_df_i[glsarparams.shape[0]:]
+        test_df.index = test_df_i[glsarparams.shape[0]:]
+        score = r2_score(test_df, res)
+        print(v, ' GLSAR R2 score: ', score, 'order: ', ORDER)
+        if glsar_best[v][0] < score and score >= 0:
+            glsar_best[v] = GLSARB(score, glsarparams.shape[0], mres, res)
+
+    def varma_ssvi_fit(train_df, train_dates, test_df, test_df_i,
+                       varma_best, ORDER=(1, 0)):
+        model = VARMAX(train_df, order=ORDER, trend='n')
+        mres = model.fit(method='lbfgs', maxiter=1000000,
+                         disp=False, return_params=False)
+        arparams = mres.coefficient_matrices_var[::-1]
+        if ORDER[1] > 0:
+            maparams = mres.coefficient_matrices_vma[::-1]
+            predict_resids = mres.resid
+
+        def varma_predict(df):
+            assert (df.shape[0] == arparams.shape[0])
+            vv = list()
+            for i in range(df.shape[0]):
+                vv.append(np.dot(arparams[i], df.iloc[i].T))
+
+            vv = np.sum(vv, axis=0)
+            if ORDER[1] > 0:
+                maresids = predict_resids[-maparams.shape[0]:]
+                # XXX: Add the MA components too
+                for i in range(maparams.shape[0]):
+                    vv += np.dot(maparams[i], maresids.iloc[i].T)
+                # XXX: Add the new error to predict_resids
+                predict_resids.loc[len(predict_resids)] = (
+                    df_test.loc[df.index[-1]+1] - vv)
+            return vv.T         # make it (1, #vars)
+
+        # XXX: Predict on a rolling basis
+        res = list()
+        # XXX: Perform a rolling prediction
+        for i in range(test_df.shape[0]-arparams.shape[0]):
+            res.append(varma_predict(test_df[i:i+arparams.shape[0]]))
+        # Turn it into a dataframe
+        res = pd.DataFrame(res, columns=colnames[:-1])
+        test_df = test_df[arparams.shape[0]:]
+        assert (res.shape == test_df.shape)
+        res.index = test_df_i[arparams.shape[0]:]
+        test_df.index = test_df_i[arparams.shape[0]:]
+        score = r2_score(test_df, res)
+        print('VARMAX R2 score: ', score, 'order: ', ORDER)
+
+        if varma_best[0] < score and score >= 0:
+            maparams = maparams.shape[0] if ORDER[1] > 0 else 0
+            varma_best = BVARMA(score, (arparams.shape[0], maparams),
+                                mres, res, test_df)
+        return varma_best
 
     def har_ssvi_fit(train_df, train_dates, test_df, har_best,
                      VARS, LAGS=[1, 5, 21]):
@@ -1039,7 +1114,7 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
             if har_best[var][0] < score and score >= 0:
                 har_best[var] = BHAR(score, LAGS, harx_fit_res, forecast)
 
-    colnames = ['alpha', 'beta', 'mu', 'rho', 'nu', 'date']
+    colnames = ['rho', 'beta', 'mu', 'alpha', 'nu', 'date']
     df = pd.read_csv(ff)
 
     # XXX: The original dataset
@@ -1052,7 +1127,8 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
     from sklearn.preprocessing import MinMaxScaler
     alpha_scaler = MinMaxScaler((-1, 1)).fit(
         np.log(df['alpha']).values.reshape(-1, 1))
-    res = alpha_scaler.fit_transform(np.log(df['alpha'].values).reshape(-1, 1))
+    res = alpha_scaler.fit_transform(
+        np.log(df['alpha'].values).reshape(-1, 1))
     df['alpha'] = res
 
     beta_scaler = MinMaxScaler((0, 1)).fit(df['beta'].values.reshape(-1, 1))
@@ -1063,12 +1139,30 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
 
     scalers = {'alpha': alpha_scaler, 'beta': beta_scaler,
                'nu': nu_scaler}
+    # scalers = {}
 
     # from statsmodels.stats.descriptivestats import describe
     # print(describe(df))
-    # assert (False)
     df_train = df[colnames][:train_sample]
 
+    if glsar_fit:
+        GLSARB = namedtuple("GLSAR", ['score', 'lags', 'model',
+                                      'tForecast'])
+        glsar_best = {i: GLSARB(score=-np.inf, lags=(0, 0, 0),
+                                model=None, tForecast=None)
+                      for i in colnames[:-1]}
+        for v in glsar_best.keys():
+            df_test = df[v].iloc[train_sample:
+                                 train_sample+CV]
+            df_test.index = df['date'].iloc[train_sample:
+                                            train_sample+CV]
+            for ar in range(1, 40):
+                df_test = df[v].iloc[train_sample-ar:train_sample-ar+CV]
+                df_test_i = df['date'].iloc[train_sample-ar:
+                                            train_sample-ar+CV]
+                glsar_ssvi_fit(df_train[v], df_train['date'],
+                               df_test, df_test_i, glsar_best,
+                               v, ORDER=ar)
     if sarimax_fit:
         import warnings
         warnings.filterwarnings(action='ignore', category=UserWarning)
@@ -1092,7 +1186,38 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
                                   v, ORDER=(ar, 0, ma))
 
     if varmax_fit:
-        assert False, print("ARMAX not yet implemented")
+        import warnings
+        warnings.filterwarnings(action='ignore', category=UserWarning)
+        BVARMA = namedtuple("BVARMA", ['score', 'lags', 'model',
+                                       'tForecast', 'rForecast'])
+        varma_best = BVARMA(score=-np.inf, lags=(0, 0),
+                            model=None, tForecast=None,
+                            rForecast=None)
+
+        df_test = df.iloc[train_sample:train_sample+CV]
+        df_test.index = df['date'].iloc[train_sample:
+                                        train_sample+CV]
+        for ar in range(1, 11):
+            df_test = df[colnames[:-1]].iloc[train_sample-ar:
+                                             train_sample-ar+CV]
+            df_test_i = df['date'].iloc[train_sample-ar:
+                                        train_sample-ar+CV]
+            # XXX: Anything above 4 here results is very bad results
+            for ma in range(0, 4):
+                varma_best = varma_ssvi_fit(df_train[colnames[:-1]],
+                                            df_train['date'],
+                                            df_test, df_test_i,
+                                            varma_best,
+                                            ORDER=(ar, ma))
+        # XXX: Now just make the new varma_best for each column
+        # separately
+        varma_best = {i: BVARMA(model=varma_best.model,
+                                lags=varma_best.lags,
+                                tForecast=varma_best.tForecast[i],
+                                score=r2_score(varma_best.rForecast[i],
+                                               varma_best.tForecast[i]),
+                                rForecast=varma_best.rForecast[i])
+                      for i in colnames[:-1]}
 
     if har_fit:
         # XXX: HAR model fit for the parameters
@@ -1136,13 +1261,106 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
                 ridge_score,
                 xgboost_score)
 
+    if bayesian_fit:
+        import arviz as az
+        import pymc as pm
+        import xarray as xr
+        # XXX: Performing grid search for lags in AR with Ridge and XGBoost
+        BAYAR = namedtuple('BAYAR',
+                           ['score', 'lags', 'model', 'tForecast'])
+        # FIXME: Include this later
+        _ = {i: BAYAR(-np.inf, 0, None, None) for i in colnames[:-1]}
+        print('-----------BAYESIAN AR------------')
+
+        # XXX: My dot product
+        def mydot(ws, coefs, df, ARS):
+            return sum([ws[j]*df[coefs[j]].values for j in ARS])
+
+        for v in colnames[:-1]:
+            for i in range(5, 11):
+                samples, response = build_samples(df_train[v], i)
+                dates = df_train['date'][i:]
+                samples = pd.DataFrame(samples,
+                                       columns=['AR%s' % j
+                                                for j in range(i)])
+                response = pd.DataFrame(response, columns=[v])
+                samples.index = pd.to_datetime(dates)
+                response.index = pd.to_datetime(dates)
+
+                # XXX: Take only the first N samples
+                N = 2000
+                assert (N <= train_sample)
+                tsamples = samples.iloc[:N]
+                tresponse = response.iloc[:N]
+
+                # XXX: AR coefficients to include
+                ARS = range(i)
+                for k in ARS:
+                    assert (k < i)
+                # XXX: Name of weights and sample columns
+                wsnames = ['w%s' % c for c in ARS]
+                coefnames = ['AR%s' % c for c in ARS]
+
+                # XXX: Now perform Bayesian estimation
+                with pm.Model() as bayesmodel:
+                    # XXX: variance for LL distribution
+                    sigma = pm.HalfCauchy('sigma', beta=10)
+                    # XXX: The intercept
+                    # intercept = pm.Normal('intercept',
+                    #                       mu=tresponse.mean())
+
+                    # XXX: The likelihood function
+                    ws = [pm.Uniform(w) for w in wsnames]
+                    mus = mydot(ws, coefnames, tsamples, ARS)
+                    # _ = pm.Normal('response',
+                    #               mu=mus,
+                    #               sigma=sigma,
+                    #               observed=tresponse)
+                    # XXX: The dof for LL distribution
+                    # dof = pm.HalfCauchy('dof', beta=10)
+                    # _ = pm.StudentT('response',
+                    #                 nu=dof,
+                    #                 mu=mus,
+                    #                 sigma=sigma,
+                    #                 observed=tresponse)
+                    # XXX: Cauchy for hetroscadicity + fat tails
+                    _ = pm.Cauchy('response',
+                                  alpha=mus,
+                                  beta=sigma,
+                                  observed=tresponse)
+                    idata = pm.sample(cores=12)
+                    print(az.summary(idata))
+                with bayesmodel:
+                    post = idata.posterior
+                    pres = sum([post[wsnames[i]] *
+                                # XXX: In sample and out of sample too!
+                               xr.DataArray(samples[coefnames[i]])
+                               for i in ARS])
+                    post['pres'] = pres
+                    response[r'$\hat{%s}$' % v] = post['pres'].mean(
+                        dim=['chain', 'draw'])
+                    print('Out-sample r2: ', r2_score(response[v][N:],
+                                                      response[r'$\hat{%s}$' %
+                                                               v][N:]))
+                    response.iloc[N:].plot()
+                    plt.show()
+                    az.plot_trace(idata, figsize=(10, 7))
+                    plt.show()
+                    # az.plot_lm(idata=idata, y="response",
+                    #            x=response.index,
+                    #            y_model="pres",
+                    #            plot_dim='response_dim_0'
+                    #            )
+                    # plt.show()
+                assert (False)
+
     if ar_fit:
         # XXX: Performing grid search for lags in AR with Ridge and XGBoost
         BAR = namedtuple('BAR',
                          ['score', 'lags', 'model', 'tForecast'])
         best_ridge = {i: BAR(-np.inf, 0, None, None) for i in colnames[:-1]}
         best_xgboost = {i: BAR(-np.inf, 0, None, None) for i in colnames[:-1]}
-        best_lstm = {i: BAR(-np.inf, 0, None, None) for i in colnames[:-1]}
+        # best_lstm = {i: BAR(-np.inf, 0, None, None) for i in colnames[:-1]}
         print('-----------AR------------')
         for i in range(1, 40):
             # LAGS = [i]
@@ -1169,12 +1387,12 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
                                           VARS=v,
                                           model_name='xgboost')
                 # XXX: This is the LSTM
-                ar_fit_ridge_xgboost_lstm(np.copy(X), np.copy(Y),
-                                          np.copy(response),
-                                          np.copy(dates), best_lstm, i,
-                                          pp=True,
-                                          VARS=v,
-                                          model_name='lstm')
+                # ar_fit_ridge_xgboost_lstm(np.copy(X), np.copy(Y),
+                #                           np.copy(response),
+                #                           np.copy(dates), best_lstm, i,
+                #                           pp=True,
+                #                           VARS=v,
+                #                           model_name='lstm')
         print('\n')
 
     def scale_back(df, scaler, var):
@@ -1202,19 +1420,26 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
                 pdfc = dd[k].tForecast
             print('Orig value R2: ', r2_score(dfc, pdfc))
 
-    # XXX: Best HAR results
+    if glsar_fit:
+        print('--------------GLSAR best results-------------------')
+        print_best_res(glsar_best)
     if sarimax_fit:
         print('--------------ARMA best results-------------------')
         print_best_res(arma_best)
+    if varmax_fit:
+        print('----------------VARMA best results----------------')
+        print_best_res(varma_best)
+    # XXX: Best HAR results
     if har_fit:
         print('--------------HAR best results-------------------')
         print_best_res(har_best)
-    # XXX: The best models for AR and VAR
+    # XXX: The best models for VAR-Ridge and VAR-XGBBoost
     if var_fit:
         print('------------------VAR best Ridge results----------------')
         print(ridge_score[0], ridge_score[1])
         print('------------------VAR best XGBoost results----------------')
         print(xgboost_score[0], xgboost_score[1])
+    # XXX: The best models for AR-Ridge AR-XGBoost
     if ar_fit:
         print('------------------AR best Ridge results----------------')
         print_best_res(best_ridge)
@@ -1236,7 +1461,8 @@ if __name__ == '__main__':
 
     # XXX: Ridge prediction for the AR and VAR models
     predict_ssvi_params(har_fit=False, ar_fit=False, var_fit=False,
-                        sarimax_fit=True, varmax_fit=False)
+                        sarimax_fit=False, varmax_fit=False,
+                        glsar_fit=False, bayesian_fit=True)
 
     # XXX: Predict the next day SSVI parameters
     # main()
