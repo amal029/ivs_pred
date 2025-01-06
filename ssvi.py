@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 # from statsmodels.stats.diagnostic import het_arch
 from sklearn.linear_model import Ridge, RidgeCV
 from xgboost import XGBRegressor
-from sklearn.metrics import r2_score
+from sklearn.metrics import r2_score, root_mean_squared_error
 from joblib import Parallel, delayed
 from sklearn.utils.validation import check_is_fitted
 from sklearn.exceptions import NotFittedError
@@ -989,8 +989,6 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
         predict_resids = mres.resid
         predict_resids.index = train_dates
         mres.plot_diagnostics()
-        plt.show()
-        assert (False)
 
         def arma_predict(df):
             assert (df.shape[0] == arparams.shape[0])
@@ -1114,7 +1112,7 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
             if har_best[var][0] < score and score >= 0:
                 har_best[var] = BHAR(score, LAGS, harx_fit_res, forecast)
 
-    colnames = ['rho', 'beta', 'mu', 'alpha', 'nu', 'date']
+    colnames = ['beta', 'rho', 'mu', 'alpha', 'nu', 'date']
     df = pd.read_csv(ff)
 
     # XXX: The original dataset
@@ -1277,7 +1275,7 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
             return sum([ws[j]*df[coefs[j]].values for j in ARS])
 
         for v in colnames[:-1]:
-            for i in range(5, 11):
+            for i in range(1, 10):
                 samples, response = build_samples(df_train[v], i)
                 dates = df_train['date'][i:]
                 samples = pd.DataFrame(samples,
@@ -1288,7 +1286,7 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
                 response.index = pd.to_datetime(dates)
 
                 # XXX: Take only the first N samples
-                N = 2000
+                N = 600
                 assert (N <= train_sample)
                 tsamples = samples.iloc[:N]
                 tresponse = response.iloc[:N]
@@ -1317,18 +1315,19 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
                     #               sigma=sigma,
                     #               observed=tresponse)
                     # XXX: The dof for LL distribution
-                    # dof = pm.HalfCauchy('dof', beta=10)
-                    # _ = pm.StudentT('response',
-                    #                 nu=dof,
-                    #                 mu=mus,
-                    #                 sigma=sigma,
-                    #                 observed=tresponse)
+                    dof = pm.HalfCauchy('dof', beta=10)
+                    _ = pm.StudentT('response',
+                                    nu=dof,
+                                    mu=mus,
+                                    sigma=sigma,
+                                    observed=tresponse)
                     # XXX: Cauchy for hetroscadicity + fat tails
-                    _ = pm.Cauchy('response',
-                                  alpha=mus,
-                                  beta=sigma,
-                                  observed=tresponse)
-                    idata = pm.sample(cores=12)
+                    # _ = pm.Cauchy('response',
+                    #               alpha=mus,
+                    #               beta=sigma,
+                    #               observed=tresponse)
+                    print('Doing Bayesian: %s' % v)
+                    idata = pm.sample(400, tune=400, cores=10)
                     print(az.summary(idata))
                 with bayesmodel:
                     post = idata.posterior
@@ -1342,17 +1341,25 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
                     print('Out-sample r2: ', r2_score(response[v][N:],
                                                       response[r'$\hat{%s}$' %
                                                                v][N:]))
+                    print('Out-sample RMSE: ', root_mean_squared_error(
+                        response[v][N:], response[r'$\hat{%s}$' % v][N:]))
+                    print('In-sample r2: ', r2_score(response[v][:N],
+                                                     response[r'$\hat{%s}$' %
+                                                              v][:N]))
+                    print('In-sample RMSE: ', root_mean_squared_error(
+                        response[v][:N], response[r'$\hat{%s}$' % v][:N]))
                     response.iloc[N:].plot()
-                    plt.show()
-                    az.plot_trace(idata, figsize=(10, 7))
-                    plt.show()
+                    plt.savefig('/tmp/res%s_%s.pdf' % (v, i),
+                                bbox_inches='tight')
+                    # az.plot_trace(idata, figsize=(10, 7))
+                    # plt.savefig('/tmp/res%s.pdf' % v, bbox_inches='tight')
                     # az.plot_lm(idata=idata, y="response",
                     #            x=response.index,
                     #            y_model="pres",
                     #            plot_dim='response_dim_0'
                     #            )
                     # plt.show()
-                assert (False)
+                # assert (False)
 
     if ar_fit:
         # XXX: Performing grid search for lags in AR with Ridge and XGBoost
