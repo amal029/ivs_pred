@@ -1112,7 +1112,112 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
             if har_best[var][0] < score and score >= 0:
                 har_best[var] = BHAR(score, LAGS, harx_fit_res, forecast)
 
-    colnames = ['beta', 'rho', 'mu', 'alpha', 'nu', 'date']
+    def bayesian_fit(df_train, p, q):
+        # XXX: My dot product
+        def mydot(ws, coefs, df, ARS):
+            return sum([ws[j]*df[coefs[j]].values for j in ARS])
+
+        # XXX: Turn AR in to ARMA
+        def ar2arma(df, p, q, X, Y):
+            # XXX: Fit OLS and get the error terms
+            from statsmodels.regression.linear_model import OLS
+            olsm = OLS(Y, X)
+            ores = olsm.fit()
+            PY = ores.predict()
+            errors = Y - PY
+            # XXX: Append p 0s to the start of errors
+            errors = np.insert(errors, 0, [0]*p)
+            # XXX: Now build the new samples and response using AR and
+            # MA parameters
+            samples = list()
+            response = list()
+            for i in range(max(p, q), df.shape[0]):
+                samp = list()
+                # FIXME: This can be vectorized later on
+                [samp.append(df[i-j]) for j in range(1, p+1)]
+                [samp.append(errors[i-j]) for j in range(1, q+1)]
+                samples.append(samp)
+                response.append(df[i])
+            samples = np.array(samples)
+            response = np.array(response)
+            dates = df_train['date'][max(p, q):]
+            # XXX: Name of weights and sample columns
+            wsnames = (['ws%s' % c for c in range(p)] +
+                       ['we%s' % c for c in range(q)])
+            coefnames = (['S%s' % c for c in range(p)] +
+                         ['E%s' % c for c in range(q)])
+            samples = pd.DataFrame(samples, columns=coefnames)
+            response = pd.DataFrame(response, columns=[v])
+            samples.index = pd.to_datetime(dates)
+            response.index = pd.to_datetime(dates)
+            return wsnames, coefnames, samples, response
+
+        wsnames, coefnames, samples, response = ar2arma(
+            df_train[v], i, q, *build_samples(df_train[v], i))
+
+        # XXX: Take only the first N samples
+        N = 600
+        assert (N <= train_sample)
+        tsamples = samples.iloc[:N]
+        tresponse = response.iloc[:N]
+        # XXX: Now perform Bayesian estimation
+        with pm.Model() as bayesmodel:
+            # XXX: variance for LL distribution
+            sigma = pm.HalfCauchy('sigma', beta=100**2)
+            # XXX: The likelihood function
+            ws = [pm.Uniform(w, lower=-1, upper=1) for w in wsnames]
+            mus = mydot(ws, coefnames, tsamples, range(i))
+            # XXX: The dof for LL distribution
+            if v == 'rho':
+                dof = pm.HalfCauchy('dof', beta=100**2)
+                _ = pm.StudentT('response',
+                                nu=dof,
+                                mu=mus,
+                                sigma=sigma,
+                                observed=tresponse)
+            else:
+                _ = pm.Normal('response',
+                              mu=mus,
+                              sigma=sigma,
+                              observed=tresponse)
+
+            print('Doing Bayesian: %s' % v)
+            idata = pm.sample(400, tune=400, cores=10)
+            print(az.summary(idata))
+            with bayesmodel:
+                post = idata.posterior
+                pres = sum([post[wsnames[i]] *
+                            # XXX: In sample and out of sample too!
+                            xr.DataArray(samples[coefnames[i]])
+                            for i in range(i+q)])
+                post['pres'] = pres
+                response[r'$\hat{%s}$' % v] = post['pres'].mean(
+                    dim=['chain', 'draw'])
+                print('Out-sample r2: ', r2_score(response[v][N:],
+                                                  response[r'$\hat{%s}$' %
+                                                           v][N:]))
+                print('Out-sample RMSE: ', root_mean_squared_error(
+                    response[v][N:], response[r'$\hat{%s}$' % v][N:]))
+                print('In-sample r2: ', r2_score(response[v][:N],
+                                                 response[r'$\hat{%s}$' %
+                                                          v][:N]))
+                print('In-sample RMSE: ', root_mean_squared_error(
+                    response[v][:N], response[r'$\hat{%s}$' % v][:N]))
+                response.iloc[N:].plot()
+                plt.savefig('/tmp/res%s_%s_%s.pdf' % (v, i, q),
+                            bbox_inches='tight')
+                # axes = az.plot_trace(idata, figsize=(10, 7))
+                # fig = axes.ravel()[0].figure
+                # fig.savefig('/tmp/az%s%s%s.pdf' % (v, i, q),
+                #             bbox_inches='tight')
+                # az.plot_lm(idata=idata, y="response",
+                #            x=response.index,
+                #            y_model="pres",
+                #            plot_dim='response_dim_0'
+                #            )
+                # plt.show()
+
+    colnames = ['rho', 'beta', 'mu', 'alpha', 'nu', 'date']
     df = pd.read_csv(ff)
 
     # XXX: The original dataset
@@ -1122,22 +1227,22 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
     dfo = dfo.drop('date', axis=1)
 
     # XXX: Scaling alpha for outliers
-    from sklearn.preprocessing import MinMaxScaler
-    alpha_scaler = MinMaxScaler((-1, 1)).fit(
-        np.log(df['alpha']).values.reshape(-1, 1))
-    res = alpha_scaler.fit_transform(
-        np.log(df['alpha'].values).reshape(-1, 1))
-    df['alpha'] = res
+    # from sklearn.preprocessing import MinMaxScaler
+    # alpha_scaler = MinMaxScaler((-1, 1)).fit(
+    #     np.log(df['alpha']).values.reshape(-1, 1))
+    # res = alpha_scaler.fit_transform(
+    #     np.log(df['alpha'].values).reshape(-1, 1))
+    # df['alpha'] = res
 
-    beta_scaler = MinMaxScaler((0, 1)).fit(df['beta'].values.reshape(-1, 1))
-    df['beta'] = beta_scaler.fit_transform(df['beta'].values.reshape(-1, 1))
+    # beta_scaler = MinMaxScaler((0, 1)).fit(df['beta'].values.reshape(-1, 1))
+    # df['beta'] = beta_scaler.fit_transform(df['beta'].values.reshape(-1, 1))
 
-    nu_scaler = MinMaxScaler((0, 1)).fit(df['nu'].values.reshape(-1, 1))
-    df['nu'] = nu_scaler.fit_transform(df['nu'].values.reshape(-1, 1))
+    # nu_scaler = MinMaxScaler((0, 1)).fit(df['nu'].values.reshape(-1, 1))
+    # df['nu'] = nu_scaler.fit_transform(df['nu'].values.reshape(-1, 1))
 
-    scalers = {'alpha': alpha_scaler, 'beta': beta_scaler,
-               'nu': nu_scaler}
-    # scalers = {}
+    # scalers = {'alpha': alpha_scaler, 'beta': beta_scaler,
+    #            'nu': nu_scaler}
+    scalers = {}
 
     # from statsmodels.stats.descriptivestats import describe
     # print(describe(df))
@@ -1270,96 +1375,11 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
         _ = {i: BAYAR(-np.inf, 0, None, None) for i in colnames[:-1]}
         print('-----------BAYESIAN AR------------')
 
-        # XXX: My dot product
-        def mydot(ws, coefs, df, ARS):
-            return sum([ws[j]*df[coefs[j]].values for j in ARS])
-
         for v in colnames[:-1]:
             for i in range(1, 10):
-                samples, response = build_samples(df_train[v], i)
-                dates = df_train['date'][i:]
-                samples = pd.DataFrame(samples,
-                                       columns=['AR%s' % j
-                                                for j in range(i)])
-                response = pd.DataFrame(response, columns=[v])
-                samples.index = pd.to_datetime(dates)
-                response.index = pd.to_datetime(dates)
-
-                # XXX: Take only the first N samples
-                N = 600
-                assert (N <= train_sample)
-                tsamples = samples.iloc[:N]
-                tresponse = response.iloc[:N]
-
-                # XXX: AR coefficients to include
-                ARS = range(i)
-                for k in ARS:
-                    assert (k < i)
-                # XXX: Name of weights and sample columns
-                wsnames = ['w%s' % c for c in ARS]
-                coefnames = ['AR%s' % c for c in ARS]
-
-                # XXX: Now perform Bayesian estimation
-                with pm.Model() as bayesmodel:
-                    # XXX: variance for LL distribution
-                    sigma = pm.HalfCauchy('sigma', beta=10)
-                    # XXX: The intercept
-                    # intercept = pm.Normal('intercept',
-                    #                       mu=tresponse.mean())
-
-                    # XXX: The likelihood function
-                    ws = [pm.Uniform(w) for w in wsnames]
-                    mus = mydot(ws, coefnames, tsamples, ARS)
-                    # _ = pm.Normal('response',
-                    #               mu=mus,
-                    #               sigma=sigma,
-                    #               observed=tresponse)
-                    # XXX: The dof for LL distribution
-                    dof = pm.HalfCauchy('dof', beta=10)
-                    _ = pm.StudentT('response',
-                                    nu=dof,
-                                    mu=mus,
-                                    sigma=sigma,
-                                    observed=tresponse)
-                    # XXX: Cauchy for hetroscadicity + fat tails
-                    # _ = pm.Cauchy('response',
-                    #               alpha=mus,
-                    #               beta=sigma,
-                    #               observed=tresponse)
-                    print('Doing Bayesian: %s' % v)
-                    idata = pm.sample(400, tune=400, cores=10)
-                    print(az.summary(idata))
-                with bayesmodel:
-                    post = idata.posterior
-                    pres = sum([post[wsnames[i]] *
-                                # XXX: In sample and out of sample too!
-                               xr.DataArray(samples[coefnames[i]])
-                               for i in ARS])
-                    post['pres'] = pres
-                    response[r'$\hat{%s}$' % v] = post['pres'].mean(
-                        dim=['chain', 'draw'])
-                    print('Out-sample r2: ', r2_score(response[v][N:],
-                                                      response[r'$\hat{%s}$' %
-                                                               v][N:]))
-                    print('Out-sample RMSE: ', root_mean_squared_error(
-                        response[v][N:], response[r'$\hat{%s}$' % v][N:]))
-                    print('In-sample r2: ', r2_score(response[v][:N],
-                                                     response[r'$\hat{%s}$' %
-                                                              v][:N]))
-                    print('In-sample RMSE: ', root_mean_squared_error(
-                        response[v][:N], response[r'$\hat{%s}$' % v][:N]))
-                    response.iloc[N:].plot()
-                    plt.savefig('/tmp/res%s_%s.pdf' % (v, i),
-                                bbox_inches='tight')
-                    # az.plot_trace(idata, figsize=(10, 7))
-                    # plt.savefig('/tmp/res%s.pdf' % v, bbox_inches='tight')
-                    # az.plot_lm(idata=idata, y="response",
-                    #            x=response.index,
-                    #            y_model="pres",
-                    #            plot_dim='response_dim_0'
-                    #            )
-                    # plt.show()
-                # assert (False)
+                # XXX: We are converting this to AR(p) MA(q) regression.
+                for q in range(1, 3):
+                    bayesian_fit(df_train, i, q)
 
     if ar_fit:
         # XXX: Performing grid search for lags in AR with Ridge and XGBoost
