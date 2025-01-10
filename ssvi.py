@@ -886,7 +886,8 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
             toret = toret.reshape(X.shape[0], toret.shape[0]//X.shape[0])
             return toret
 
-        names = {0: 'alpha', 1: 'beta', 2: 'mu', 3: 'rho', 4: 'nu'}
+        # names = {0: 'alpha', 1: 'beta', 2: 'mu', 3: 'rho', 4: 'nu'}
+        names = {i: j for i, j in enumerate(colnames)}
         X = X.reshape(X.shape[0], X.shape[1]*X.shape[2])
         alphas = np.array([0.1, 0.5, 1, 2, 5, 10])
         if model_name == 'ridge':
@@ -915,6 +916,8 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
             testY = pd.DataFrame(responseY[:, i], columns=[colnames[i]])
             testY['date'] = responseY[:, -1]
             testYP.index = pd.to_datetime(testYP['date'])
+            # print(testY.head())
+            # print(testYP.head())
             score = r2_score(testY[names[i]], testYP[names[i]])
             if best[names[i]][0] < score:
                 best[names[i]] = BAR(score, lags, model, testYP[names[i]])
@@ -988,7 +991,6 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
         maparams = mres.maparams[::-1]
         predict_resids = mres.resid
         predict_resids.index = train_dates
-        mres.plot_diagnostics()
 
         def arma_predict(df):
             assert (df.shape[0] == arparams.shape[0])
@@ -1112,7 +1114,7 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
             if har_best[var][0] < score and score >= 0:
                 har_best[var] = BHAR(score, LAGS, harx_fit_res, forecast)
 
-    def bayesian_fit(df_train, p, q):
+    def bayesian_fit_f(df_train, p, q):
         # XXX: My dot product
         def mydot(ws, coefs, df, ARS):
             return sum([ws[j]*df[coefs[j]].values for j in ARS])
@@ -1217,6 +1219,7 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
                 #            )
                 # plt.show()
 
+    print('bfit? ', bayesian_fit)
     colnames = ['rho', 'beta', 'mu', 'alpha', 'nu', 'date']
     df = pd.read_csv(ff)
 
@@ -1227,12 +1230,12 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
     dfo = dfo.drop('date', axis=1)
 
     # XXX: Scaling alpha for outliers
-    # from sklearn.preprocessing import MinMaxScaler
-    # alpha_scaler = MinMaxScaler((-1, 1)).fit(
-    #     np.log(df['alpha']).values.reshape(-1, 1))
-    # res = alpha_scaler.fit_transform(
-    #     np.log(df['alpha'].values).reshape(-1, 1))
-    # df['alpha'] = res
+    from sklearn.preprocessing import MinMaxScaler
+    alpha_scaler = MinMaxScaler((-1, 1)).fit(
+        np.log(df['alpha']).values.reshape(-1, 1))
+    res = alpha_scaler.fit_transform(
+        np.log(df['alpha'].values).reshape(-1, 1))
+    df['alpha'] = res
 
     # beta_scaler = MinMaxScaler((0, 1)).fit(df['beta'].values.reshape(-1, 1))
     # df['beta'] = beta_scaler.fit_transform(df['beta'].values.reshape(-1, 1))
@@ -1240,9 +1243,11 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
     # nu_scaler = MinMaxScaler((0, 1)).fit(df['nu'].values.reshape(-1, 1))
     # df['nu'] = nu_scaler.fit_transform(df['nu'].values.reshape(-1, 1))
 
-    # scalers = {'alpha': alpha_scaler, 'beta': beta_scaler,
-    #            'nu': nu_scaler}
-    scalers = {}
+    scalers = {'alpha': alpha_scaler
+               # 'beta': beta_scaler,
+               # 'nu': nu_scaler
+               }
+    # scalers = {}
 
     # from statsmodels.stats.descriptivestats import describe
     # print(describe(df))
@@ -1379,7 +1384,7 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
             for i in range(1, 10):
                 # XXX: We are converting this to AR(p) MA(q) regression.
                 for q in range(1, 3):
-                    bayesian_fit(df_train, i, q)
+                    bayesian_fit_f(df_train, i, q)
 
     if ar_fit:
         # XXX: Performing grid search for lags in AR with Ridge and XGBoost
@@ -1487,9 +1492,9 @@ if __name__ == '__main__':
     # main_raw(dfs, 'call')
 
     # XXX: Ridge prediction for the AR and VAR models
-    predict_ssvi_params(har_fit=False, ar_fit=False, var_fit=False,
+    predict_ssvi_params(har_fit=False, ar_fit=True, var_fit=False,
                         sarimax_fit=False, varmax_fit=False,
-                        glsar_fit=False, bayesian_fit=True)
+                        glsar_fit=False, bayesian_fit=False)
 
     # XXX: Predict the next day SSVI parameters
     # main()
