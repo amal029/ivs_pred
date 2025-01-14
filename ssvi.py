@@ -1114,112 +1114,120 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
             if har_best[var][0] < score and score >= 0:
                 har_best[var] = BHAR(score, LAGS, harx_fit_res, forecast)
 
-    def bayesian_fit_f(df_train, p, q):
-        # XXX: My dot product
-        def mydot(ws, coefs, df, ARS):
-            return sum([ws[j]*df[coefs[j]].values for j in ARS])
-
-        # XXX: Turn AR in to ARMA
-        def ar2arma(df, p, q, X, Y):
-            # XXX: Fit OLS and get the error terms
-            from statsmodels.regression.linear_model import OLS
-            olsm = OLS(Y, X)
-            ores = olsm.fit()
-            PY = ores.predict()
-            errors = Y - PY
-            # XXX: Append p 0s to the start of errors
-            errors = np.insert(errors, 0, [0]*p)
-            # XXX: Now build the new samples and response using AR and
-            # MA parameters
-            samples = list()
-            response = list()
-            for i in range(max(p, q), df.shape[0]):
-                samp = list()
-                # FIXME: This can be vectorized later on
-                [samp.append(df[i-j]) for j in range(1, p+1)]
-                [samp.append(errors[i-j]) for j in range(1, q+1)]
-                samples.append(samp)
-                response.append(df[i])
-            samples = np.array(samples)
-            response = np.array(response)
-            dates = df_train['date'][max(p, q):]
-            # XXX: Name of weights and sample columns
-            wsnames = (['ws%s' % c for c in range(p)] +
-                       ['we%s' % c for c in range(q)])
-            coefnames = (['S%s' % c for c in range(p)] +
-                         ['E%s' % c for c in range(q)])
-            samples = pd.DataFrame(samples, columns=coefnames)
-            response = pd.DataFrame(response, columns=[v])
-            samples.index = pd.to_datetime(dates)
-            response.index = pd.to_datetime(dates)
-            return wsnames, coefnames, samples, response
-
-        wsnames, coefnames, samples, response = ar2arma(
-            df_train[v], i, q, *build_samples(df_train[v], i))
-
-        # XXX: Take only the first N samples
-        N = 600
-        assert (N <= train_sample)
-        tsamples = samples.iloc[:N]
-        tresponse = response.iloc[:N]
+    def bayesian_ar(df_train, p, v, ws, df_test, df_test_i, barmabest):
+        samples, response = build_samples(df_train[v], p)
         # XXX: Now perform Bayesian estimation
-        with pm.Model() as bayesmodel:
+        with pm.Model() as model:
+            tsamples = pm.Data("samples", samples)
+            tresponse = pm.Data("response", response)
             # XXX: variance for LL distribution
             sigma = pm.HalfCauchy('sigma', beta=100**2)
             # XXX: The likelihood function
-            ws = [pm.Uniform(w, lower=-1, upper=1) for w in wsnames]
-            mus = mydot(ws, coefnames, tsamples, range(i))
-            # XXX: The dof for LL distribution
-            if v == 'rho':
-                dof = pm.HalfCauchy('dof', beta=100**2)
-                _ = pm.StudentT('response',
-                                nu=dof,
-                                mu=mus,
-                                sigma=sigma,
-                                observed=tresponse)
+            if "ws" == "uniform":
+                ws = [pm.Uniform('w%s' % w, lower=-1, upper=1)
+                      for w in range(p)]
+                intercept = pm.Uniform("intercept", lower=-1,
+                                       upper=1)
             else:
-                _ = pm.Normal('response',
-                              mu=mus,
-                              sigma=sigma,
-                              observed=tresponse)
+                ws = [pm.Normal('w%s' % w) for w in range(p)]
+                intercept = pm.Normal("intercept")
+            # XXX: The dof for LL distribution
+            dof = pm.HalfCauchy('dof', beta=100**2)
+            _ = pm.StudentT('response',
+                            nu=dof,
+                            mu=intercept + tsamples.dot(ws),
+                            sigma=sigma,
+                            observed=tresponse)
+        # XXX: For testing to get the best from CV
+        test_samples, test_response = build_samples(df_test, p)
+        import pymc.sampling.jax as pmjax
+        with model:
+            idata = pmjax.sample_numpyro_nuts(chains=10,
+                                              target_accept=0.97)
+            # print('p:%s, ws:%s' % (p, ws))
+            # print(az.summary(idata))
+            # XXX: Sample posterior and return the prediction
+            pm.set_data({"tsamples": test_samples,
+                         "tresponse": np.zeros(test_response.shape[0])})
+            idata.extend(pm.sample_posterior_predictive(idata,
+                                                        predictions=False))
+        res = idata.posterior_predictive['response'].median(
+            ['chain', 'draw'])
+        score = r2_score(test_response[v], res)
+        print(v, ' Bayesian ARMA R2 score: ', score, 'order: ', (p, 0, 0, ws))
+        if barmabest[v][0] < score:
+            barmabest[v] = BAYAR(score, (p, 0, 0, ws), model, res)
 
-            print('Doing Bayesian: %s' % v)
-            idata = pm.sample(400, tune=400, cores=10)
-            print(az.summary(idata))
-            with bayesmodel:
-                post = idata.posterior
-                pres = sum([post[wsnames[i]] *
-                            # XXX: In sample and out of sample too!
-                            xr.DataArray(samples[coefnames[i]])
-                            for i in range(i+q)])
-                post['pres'] = pres
-                response[r'$\hat{%s}$' % v] = post['pres'].mean(
-                    dim=['chain', 'draw'])
-                print('Out-sample r2: ', r2_score(response[v][N:],
-                                                  response[r'$\hat{%s}$' %
-                                                           v][N:]))
-                print('Out-sample RMSE: ', root_mean_squared_error(
-                    response[v][N:], response[r'$\hat{%s}$' % v][N:]))
-                print('In-sample r2: ', r2_score(response[v][:N],
-                                                 response[r'$\hat{%s}$' %
-                                                          v][:N]))
-                print('In-sample RMSE: ', root_mean_squared_error(
-                    response[v][:N], response[r'$\hat{%s}$' % v][:N]))
-                response.iloc[N:].plot()
-                plt.savefig('/tmp/res%s_%s_%s.pdf' % (v, i, q),
-                            bbox_inches='tight')
-                # axes = az.plot_trace(idata, figsize=(10, 7))
-                # fig = axes.ravel()[0].figure
-                # fig.savefig('/tmp/az%s%s%s.pdf' % (v, i, q),
-                #             bbox_inches='tight')
-                # az.plot_lm(idata=idata, y="response",
-                #            x=response.index,
-                #            y_model="pres",
-                #            plot_dim='response_dim_0'
-                #            )
-                # plt.show()
+    def bayesian_arma(df_train, p, q, v, ws, df_test, df_test_i,
+                      barmabest):
+        def step(*args):
+            """This is the step function for ARMA scan
+            """
+            ytrue = args[0]
+            ys = list(args[1:p+1])
+            errs = list(args[p+1:p+1+q])
+            intercept, w, ew, sigma, dof = args[p+1+q:]
+            yp = w.dot(ys) + intercept + ew.dot(errs)
+            # Likelihood function
+            yhat = pm.StudentT.dist(mu=yp, sigma=sigma, nu=dof)
+            epsilon = ytrue - yp
+            return (epsilon, yhat), collect_default_updates([yhat, epsilon])
 
-    print('bfit? ', bayesian_fit)
+        import pytensor as pt
+        from pymc.pytensorf import collect_default_updates
+        arlags = [-1*i for i in range(p+1)]
+        malags = [-1*i for i in range(1, q+1)]
+        with pm.Model() as model:
+            dof = pm.HalfCauchy("dof", beta=10**2)
+            sigma = pm.HalfCauchy('sigma', beta=10)
+            if "ws" == "uniform":
+                w = pm.Uniform("ws", lower=-1, upper=1, shape=p)
+                ew = pm.Uniform("ew", lower=-1, upper=1, shape=q)
+                intercept = pm.Uniform("intercept", lower=-1, upper=1)
+            else:
+                w = pm.Normal("ws", shape=p)
+                ew = pm.Normal("ew", shape=q)
+                intercept = pm.Normal("intercept")
+
+            Y = pm.Data("Y", df_train)
+            err0 = (pt.tensor.zeros(shape=q)[0] if q == 1 else
+                    pt.tensor.zeros(shape=q))
+            initials = [{'initial': err0, 'taps': malags}, None]
+            [epsilons, yhat], update = pt.scan(
+                fn=step,
+                sequences=[{'input': Y, 'taps': arlags}],
+                outputs_info=initials,
+                non_sequences=[intercept, w, ew, sigma, dof],
+                strict=True, allow_gc=False)
+
+            tresponse = pm.Data("tresponse", df_train[p:train_sample])
+            model.register_rv(yhat, name='response', observed=tresponse)
+        import pymc.sampling.jax as pmjax
+        with model:
+            idata = pmjax.sample_numpyro_nuts(chains=6, target_accept=0.97)
+            pm.set_data({"Y": df_test,
+                         "tresponse": np.zeros(df_test.shape[0])})
+            idata.extend(pm.sample_posterior_predictive(idata,
+                                                        predictions=False))
+            res = idata.posterior_predictive['response'].median(
+                ['chain', 'draw'])
+        # XXX: Notice the addition of 'p', because of lags
+        score = r2_score(df_test+p, res)
+        print(v, ' Bayesian ARMA R2 score: ', score, 'order: ', (p, 0, 0, ws))
+        if barmabest[v][0] < score:
+            barmabest[v] = BAYAR(score, (p, 0, q, ws), model, res)
+
+    def bayesian_fit_f(df_train, train_dates, test_df, test_df_i,
+                       barmabest, v, p, q, ws):
+        if q == 0:
+            res = bayesian_ar(df_train, p, v, ws, test_df, test_df_i,
+                              barmabest)
+        else:
+            res = bayesian_arma(df_train, p, q, v, ws, test_df, test_df_i,
+                                barmabest)
+        return res
+
+    # XXX: Calling the main functions
     colnames = ['rho', 'beta', 'mu', 'alpha', 'nu', 'date']
     df = pd.read_csv(ff)
 
@@ -1284,11 +1292,11 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
                                  train_sample+CV]
             df_test.index = df['date'].iloc[train_sample:
                                             train_sample+CV]
-            for ar in range(1, 11):
+            for ar in range(1, 10):
                 df_test = df[v].iloc[train_sample-ar:train_sample-ar+CV]
                 df_test_i = df['date'].iloc[train_sample-ar:
                                             train_sample-ar+CV]
-                for ma in range(0, 11):
+                for ma in range(0, 5):
                     arma_ssvi_fit(df_train[v], df_train['date'],
                                   df_test, df_test_i, arma_best,
                                   v, ORDER=(ar, 0, ma))
@@ -1370,21 +1378,28 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
                 xgboost_score)
 
     if bayesian_fit:
-        import arviz as az
+        # import arviz as az
         import pymc as pm
-        import xarray as xr
         # XXX: Performing grid search for lags in AR with Ridge and XGBoost
         BAYAR = namedtuple('BAYAR',
                            ['score', 'lags', 'model', 'tForecast'])
-        # FIXME: Include this later
-        _ = {i: BAYAR(-np.inf, 0, None, None) for i in colnames[:-1]}
+        barmabest = {i: BAYAR(-np.inf, 0, None, None) for i in colnames[:-1]}
         print('-----------BAYESIAN AR------------')
 
         for v in colnames[:-1]:
-            for i in range(1, 10):
-                # XXX: We are converting this to AR(p) MA(q) regression.
-                for q in range(1, 3):
-                    bayesian_fit_f(df_train, i, q)
+            df_test = df[v].iloc[train_sample:
+                                 train_sample+CV]
+            df_test.index = df['date'].iloc[train_sample:
+                                            train_sample+CV]
+            for ar in range(1, 10):
+                df_test = df[v].iloc[train_sample-ar:train_sample-ar+CV]
+                df_test_i = df['date'].iloc[train_sample-ar:
+                                            train_sample-ar+CV]
+                for ma in range(0, 5):
+                    for ws in ['unform', 'normal']:
+                        bayesian_fit_f(df_train[v], df_train['date'],
+                                       df_test, df_test_i, barmabest,
+                                       v, ar, ma)
 
     if ar_fit:
         # XXX: Performing grid search for lags in AR with Ridge and XGBoost
@@ -1451,6 +1466,7 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
             else:
                 pdfc = dd[k].tForecast
             print('Orig value R2: ', r2_score(dfc, pdfc))
+            print('Orig value RMSE: ', root_mean_squared_error(dfc, pdfc))
 
     if glsar_fit:
         print('--------------GLSAR best results-------------------')
@@ -1492,9 +1508,9 @@ if __name__ == '__main__':
     # main_raw(dfs, 'call')
 
     # XXX: Ridge prediction for the AR and VAR models
-    predict_ssvi_params(har_fit=False, ar_fit=True, var_fit=False,
+    predict_ssvi_params(har_fit=False, ar_fit=False, var_fit=False,
                         sarimax_fit=False, varmax_fit=False,
-                        glsar_fit=False, bayesian_fit=False)
+                        glsar_fit=False, bayesian_fit=True)
 
     # XXX: Predict the next day SSVI parameters
     # main()
