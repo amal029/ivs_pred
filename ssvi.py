@@ -1152,6 +1152,8 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
                                                         predictions=False,
                                                         progressbar=False))
         res = idata.posterior_predictive['response'].median(['chain', 'draw'])
+        res = res.to_pandas()
+        res.index = df_test_i[p:]
         score = r2_score(test_response, res)
         print(v, ' Bayesian ARMA R2 score: ', score, 'order: ', (p, 0, 0, mws))
         if barmabest[v][0] < score:
@@ -1203,7 +1205,8 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
             model.register_rv(yhat, name='response', observed=tresponse)
         import pymc.sampling.jax as pmjax
         with model:
-            idata = pmjax.sample_numpyro_nuts(chains=5, target_accept=0.97,
+            idata = pmjax.sample_numpyro_nuts(chains=5,
+                                              target_accept=0.97,
                                               progressbar=False)
             pm.set_data({"Y": df_test,
                          "tresponse": np.zeros(df_test.shape[0])})
@@ -1211,6 +1214,8 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
                                                         predictions=False))
             res = idata.posterior_predictive['response'].median(
                 ['chain', 'draw'])
+            res = res.to_pandas()
+            res.index = df_test_i[p:]
         # XXX: Notice the addition of 'p', because of lags
         score = r2_score(df_test[p:], res)
         print(v, ' Bayesian ARMA R2 score: ', score, 'order: ', (p, 0, q, mws))
@@ -1476,6 +1481,9 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
     if sarimax_fit:
         print('--------------ARMA best results-------------------')
         print_best_res(arma_best)
+    if bayesian_fit:
+        print('--------------ARMA best results-------------------')
+        print_best_res(barmabest)
     if varmax_fit:
         print('----------------VARMA best results----------------')
         print_best_res(varma_best)
