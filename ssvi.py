@@ -1114,16 +1114,16 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
             if har_best[var][0] < score and score >= 0:
                 har_best[var] = BHAR(score, LAGS, harx_fit_res, forecast)
 
-    def bayesian_ar(df_train, p, v, ws, df_test, df_test_i, barmabest):
-        samples, response = build_samples(df_train[v], p)
+    def bayesian_ar(df_train, p, v, mws, df_test, df_test_i, barmabest):
+        samples, response = build_samples(df_train, p)
         # XXX: Now perform Bayesian estimation
         with pm.Model() as model:
-            tsamples = pm.Data("samples", samples)
-            tresponse = pm.Data("response", response)
+            tsamples = pm.Data("tsamples", samples)
+            tresponse = pm.Data("tresponse", response)
             # XXX: variance for LL distribution
             sigma = pm.HalfCauchy('sigma', beta=100**2)
             # XXX: The likelihood function
-            if "ws" == "uniform":
+            if mws == "uniform":
                 ws = [pm.Uniform('w%s' % w, lower=-1, upper=1)
                       for w in range(p)]
                 intercept = pm.Uniform("intercept", lower=-1,
@@ -1143,22 +1143,21 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
         import pymc.sampling.jax as pmjax
         with model:
             idata = pmjax.sample_numpyro_nuts(chains=10,
-                                              target_accept=0.97)
-            # print('p:%s, ws:%s' % (p, ws))
-            # print(az.summary(idata))
+                                              target_accept=0.97,
+                                              progressbar=False)
             # XXX: Sample posterior and return the prediction
             pm.set_data({"tsamples": test_samples,
                          "tresponse": np.zeros(test_response.shape[0])})
             idata.extend(pm.sample_posterior_predictive(idata,
-                                                        predictions=False))
-        res = idata.posterior_predictive['response'].median(
-            ['chain', 'draw'])
-        score = r2_score(test_response[v], res)
-        print(v, ' Bayesian ARMA R2 score: ', score, 'order: ', (p, 0, 0, ws))
+                                                        predictions=False,
+                                                        progressbar=False))
+        res = idata.posterior_predictive['response'].median(['chain', 'draw'])
+        score = r2_score(test_response, res)
+        print(v, ' Bayesian ARMA R2 score: ', score, 'order: ', (p, 0, 0, mws))
         if barmabest[v][0] < score:
-            barmabest[v] = BAYAR(score, (p, 0, 0, ws), model, res)
+            barmabest[v] = BAYAR(score, (p, 0, 0, mws), model, res)
 
-    def bayesian_arma(df_train, p, q, v, ws, df_test, df_test_i,
+    def bayesian_arma(df_train, p, q, v, mws, df_test, df_test_i,
                       barmabest):
         def step(*args):
             """This is the step function for ARMA scan
@@ -1180,7 +1179,7 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
         with pm.Model() as model:
             dof = pm.HalfCauchy("dof", beta=10**2)
             sigma = pm.HalfCauchy('sigma', beta=10)
-            if "ws" == "uniform":
+            if mws == "uniform":
                 w = pm.Uniform("ws", lower=-1, upper=1, shape=p)
                 ew = pm.Uniform("ew", lower=-1, upper=1, shape=q)
                 intercept = pm.Uniform("intercept", lower=-1, upper=1)
@@ -1204,7 +1203,8 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
             model.register_rv(yhat, name='response', observed=tresponse)
         import pymc.sampling.jax as pmjax
         with model:
-            idata = pmjax.sample_numpyro_nuts(chains=6, target_accept=0.97)
+            idata = pmjax.sample_numpyro_nuts(chains=5, target_accept=0.97,
+                                              progressbar=False)
             pm.set_data({"Y": df_test,
                          "tresponse": np.zeros(df_test.shape[0])})
             idata.extend(pm.sample_posterior_predictive(idata,
@@ -1212,10 +1212,10 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
             res = idata.posterior_predictive['response'].median(
                 ['chain', 'draw'])
         # XXX: Notice the addition of 'p', because of lags
-        score = r2_score(df_test+p, res)
-        print(v, ' Bayesian ARMA R2 score: ', score, 'order: ', (p, 0, 0, ws))
+        score = r2_score(df_test[p:], res)
+        print(v, ' Bayesian ARMA R2 score: ', score, 'order: ', (p, 0, q, mws))
         if barmabest[v][0] < score:
-            barmabest[v] = BAYAR(score, (p, 0, q, ws), model, res)
+            barmabest[v] = BAYAR(score, (p, 0, q, mws), model, res)
 
     def bayesian_fit_f(df_train, train_dates, test_df, test_df_i,
                        barmabest, v, p, q, ws):
@@ -1378,6 +1378,8 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
                 xgboost_score)
 
     if bayesian_fit:
+        import warnings
+        warnings.filterwarnings(action='ignore', category=UserWarning)
         # import arviz as az
         import pymc as pm
         # XXX: Performing grid search for lags in AR with Ridge and XGBoost
@@ -1396,10 +1398,10 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
                 df_test_i = df['date'].iloc[train_sample-ar:
                                             train_sample-ar+CV]
                 for ma in range(0, 5):
-                    for ws in ['unform', 'normal']:
+                    for mws in ['uniform', 'normal']:
                         bayesian_fit_f(df_train[v], df_train['date'],
                                        df_test, df_test_i, barmabest,
-                                       v, ar, ma)
+                                       v, ar, ma, mws)
 
     if ar_fit:
         # XXX: Performing grid search for lags in AR with Ridge and XGBoost
