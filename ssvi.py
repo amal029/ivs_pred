@@ -1013,27 +1013,23 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
                                    train_sample-lags-1+CV]  # the -1 is needed
             testX, responseY = build_samples(df_test, lags)
             testX = testX[:, :, :-1]
-            res = {i: [] for i in colnames[:-1]}
-            models = list()
             # XXX: Training and testing the LSTM
+            print('-------------------LSTM-------------------')
             for k, v in enumerate(colnames[:-1]):
                 print('Doing var: ', v)
                 model = MYLSTM(lags, batch_size=None,
                                activation=activations[v],
                                TT='VAR').fit(X, Y[:, k])
-                models.append(model)
                 testYP = model.predict(testX)
                 testYP = testYP.reshape(testYP.shape[0],)
-                res[v] = testYP
-            testYP = pd.DataFrame(res)
-            testYP['date'] = responseY[:, -1]
-            testY = pd.DataFrame(responseY, columns=colnames)
-            print('-------------------LSTM-------------------')
-            tscore = scores(testY, testYP, insample=False)
-            if lstm_score[colnames[0]][0] < tscore:
-                for k, v in enumerate(colnames[:-1]):
+                testYP = pd.DataFrame(testYP, columns=[v])
+                testYP['date'] = responseY[:, -1]
+                testYP.index = pd.to_datetime(testYP['date'])
+                testY = pd.DataFrame(responseY[:, k], columns=[v])
+                score = r2_score(testY[v], testYP[v])
+                if lstm_score[v][0] < score:
                     # XXX: The tscore is the average score
-                    lstm_score[v] = BVAR(tscore, lags, models[k], testYP[v])
+                    lstm_score[v] = BVAR(score, lags, model, testYP[v])
         if doridgexg:
             # flattned for Ridge
             X = X.reshape(X.shape[0], X.shape[1]*X.shape[2])
@@ -1058,28 +1054,26 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
             # XXX: This is for the RidgeCV
             testYP = pd.DataFrame(ridge.predict(testX), columns=colnames[:-1])
             testYP['date'] = responseY[:, -1]
+            testYP.index = pd.to_datetime(testYP['date'])
             testY = pd.DataFrame(responseY, columns=colnames)
             # out of sample scores
             tscore = scores(testY, testYP, insample=False)
             if reg_score[colnames[0]][0] < tscore:
                 for k, v in enumerate(colnames[:-1]):
-                    reg_score = BVAR(tscore, lags, ridge, testYP[v])
+                    reg_score[v] = BVAR(tscore, lags, ridge, testYP[v])
 
             print('-------------------XGBoost-------------------')
-            xgres = {i: [] for i in colnames[:-1]}
-            models = list()
             # XXX: This is XGBRegressor
             for k, v in enumerate(colnames[:-1]):
                 model = XGBRegressor(n_jobs=-1,
                                      booster='gblinear').fit(X, Y[:, k])
-                xgres[v] = model.predict(testX)
-                models.append(model)
-            testYP = pd.DataFrame(xgres)
-            testYP['date'] = responseY[:, -1]
-            tscore = scores(testY, testYP, insample=False)
-            if xgboost_score[colnames[0]][0] < tscore:
-                for k, v in enumerate(colnames[:-1]):
-                    xgboost_score = BVAR(tscore, lags, models[k], testYP[v])
+                testYP = model.predict(testX)
+                testYP = pd.DataFrame(testYP, columns=[v])
+                testYP['date'] = responseY[:, -1]
+                testYP.index = pd.to_datetime(testYP['date'])
+                score = r2_score(testY[v], testYP[v])
+                if xgboost_score[v][0] < score:
+                    xgboost_score[v] = BVAR(score, lags, model, testYP[v])
         return reg_score, xgboost_score, lstm_score
 
     def arma_ssvi_fit(train_df, train_dates, test_df, test_df_i,
@@ -1609,12 +1603,12 @@ def predict_ssvi_params(ff='./ssvi_params_SPX_call.csv', train_sample=3000,
     if var_fit:
         if doridgexg:
             print('------------------VAR best Ridge results----------------')
-            print(r_score[0], r_score[1])
+            print_best_res(r_score)
             print('------------------VAR best XGBoost results----------------')
-            print(x_score[0], x_score[1])
+            print_best_res(x_score)
         if dolstm:
             print('------------------VAR best LSTM results----------------')
-            print(l_score[0], l_score[1])
+            print_best_res(l_score)
     # XXX: The best models for AR-Ridge AR-XGBoost
     if ar_fit:
         if doridgexg:
@@ -1640,9 +1634,9 @@ if __name__ == '__main__':
     # main_raw(dfs, 'call')
 
     # XXX: Ridge prediction for the AR and VAR models
-    predict_ssvi_params(har_fit=True, ar_fit=True, dolstm=False,
-                        var_fit=False, doridgexg=True,
-                        sarimax_fit=True, varmax_fit=False,
+    predict_ssvi_params(har_fit=False, ar_fit=True, dolstm=True,
+                        var_fit=False, doridgexg=False,
+                        sarimax_fit=False, varmax_fit=False,
                         glsar_fit=False, bayesian_fit=False)
 
     # XXX: Predict the next day SSVI parameters
