@@ -11,6 +11,7 @@ from pred import load_data
 from sklearn.metrics import root_mean_squared_error
 from sklearn.metrics import mean_absolute_percentage_error
 from sklearn.metrics import r2_score
+from sklearn.utils.validation import check_is_fitted
 from keras.layers import Input, Dense
 from keras.models import Model
 from keras import ops
@@ -201,7 +202,7 @@ class VaeRegression:
 
         self._reg.fit(tX_encoded, tY_encoded)
     
-    def predict(self, vX, TSTEPS, type):
+    def predict(self, vX, vY, TSTEPS, type):
         if type != 'surf':
             vX = vX[:, :-1]
 
@@ -209,8 +210,8 @@ class VaeRegression:
             self.load()
             if self.vae is None:
                 raise ValueError('Model not trained')
-        elif self.vae.istrained == False:
-            raise ValueError('Model not trained')
+        # elif self.vae.istrained == False:
+        #     raise ValueError('Model not trained')
 
         vX = vX.reshape(vX.shape[0], TSTEPS, vX.shape[1]//TSTEPS)
         vX = vX.reshape(vX.shape[0]*vX.shape[1], vX.shape[2])
@@ -221,11 +222,13 @@ class VaeRegression:
         vX_encoded = vX_encoded.reshape(vX_encoded.shape[0], vX_encoded.shape[1]*vX_encoded.shape[2])
 
         vYp = self._reg.predict(vX_encoded)
-        return self.vae.decode(vYp)
+        return self.vae.decode(vYp).numpy()
 
 # PCA regression model
 class PcaRegression:
-    def __init__(self, reg=''):
+    def __init__(self, n_components, n_components_y, reg=''):
+        self.reg_svd = PCA(n_components=n_components)
+        self.reg_svdY = PCA(n_components=n_components_y)
         if reg == '':
             self._reg = Ridge()
         elif reg == 'lasso':
@@ -235,18 +238,35 @@ class PcaRegression:
     
     def fit(self, tX, tY, TSTEPS, type):
 
-        pca = PCA(n_components=0.95)
-        tX = pca.fit_transform(tX)
-        tY = pca.fit_transform(tY)
+        tX = self.reg_svd.fit_transform(tX)
+        tY = self.reg_svdY.fit_transform(tY)
 
         self._reg.fit(tX, tY)
     
-    def predict(self, vX, TSTEPS, type):
+    def predict(self, vX, vY, TSTEPS, type):
+        check_is_fitted(self.reg_svd)
+        check_is_fitted(self.reg_svdY)
+        check_is_fitted(self._reg)
         
-        pca = PCA(n_components=0.95)
-        vX_transform = pca.fit_transform(vX)
+        vX_transform = self.reg_svd.transform(vX)
         vYp = self._reg.predict(vX_transform)
-        return pca.inverse_transform(vYp)
+        # Ensure 2 dimensions
+        if len(vYp.shape) == 1:
+            vYp = vYp.reshape(vYp.shape[0], 1)
+        result = self.reg_svdY.inverse_transform(vYp)
+        return result 
+
+def pca_count(tX, tY):
+    # Define pca model outputing 95% variance ratio
+    pca = PCA(n_components=0.95)
+    pcaY = PCA(n_components=0.95)
+    pca.fit(tX)
+    pcaY.fit(tY)
+
+    n_components = pca.n_components_ 
+    n_components_y = pcaY.n_components_ 
+
+    return n_components, n_components_y
     
 class HarRegression:
     def __init__(self, reg=''):
@@ -294,7 +314,7 @@ class HarRegression:
         tX = self.har_transform(tX, TSTEPS=TSTEPS, type='skew')
         self._reg.fit(tX, tY)
     
-    def predict(self, vX, TSTEPS, type):
+    def predict(self, vX, vY, TSTEPS, type):
         if type[1:] =='skew':
             vX = vX[:, :-1]
             # Reshape to 3D
@@ -334,7 +354,8 @@ def surf_pred(data, otype, model_name, TSTEPS, dd, learn="ridge"):
     elif model_name == 'vae':
         reg = VaeRegression(learn, './surf_feature_models/%s_ts_%s_encoder.keras' % (model_name, otype))
     elif model_name == 'pca':
-        reg = PcaRegression(learn)
+        n_componentsX, n_componentsY = pca_count(tX, tY)
+        reg = PcaRegression(n_componentsX, n_componentsY, learn)
     
     reg.fit(tX, tY, TSTEPS, 'surf')
 
@@ -390,7 +411,8 @@ def tskew_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs', learn="rid
         elif model_name == 'vae':
             reg = VaeRegression(learn, './tskew_feature_models/%s_ts_%s_%s_encoder.keras' % (model_name, m, otype))
         elif model_name == 'pca':
-            reg = PcaRegression(learn)
+            n_componentsX, n_componentsY = pca_count(tskew, tYY)
+            reg = PcaRegression(n_componentsX, n_componentsY, learn)
         
         reg.fit(tskew, tYY, TSTEPS, 'tskew')
         
@@ -443,7 +465,8 @@ def mskew_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs', learn="rid
         elif model_name == 'vae':
             reg = VaeRegression(learn, './mskew_feature_models/%s_ts_%s_%s_encoder.keras' % (model_name, t, otype))
         elif model_name == 'pca':
-            reg = PcaRegression(learn)
+            n_componentsX, n_componentsY = pca_count(mskew, tYY)
+            reg = PcaRegression(n_componentsX, n_componentsY, learn)
         
         reg.fit(mskew, tYY, TSTEPS, 'mskew')
 
@@ -489,14 +512,16 @@ def point_pred(data, otype, model_name='pca', TSTEPS=10, dd='./figs', learn="rid
                 # XXX: Add the moneyness and term structure to the sample set
                 k = np.array([s, t]*tX.shape[0]).reshape(tX.shape[0], 2)
                 train_vec = np.append(train_vec, k, axis=1)
+
+                # Add dimension for point prediction
+                tYY = tYY.reshape(tYY.shape[0], 1)
                 
                 if model_name == 'har':
                     reg = HarRegression(learn)
                 elif model_name == 'pca':
-                    reg = PcaRegression(learn)
+                    n_componentsX, n_componentsY = pca_count(train_vec, tYY)
+                    reg = PcaRegression(n_componentsX, n_componentsY, learn)
                 
-                # Add dimension for point prediction
-                tYY = tYY.reshape(tYY.shape[0], 1)
                 reg.fit(train_vec, tYY, TSTEPS, 'point')
 
 
@@ -565,16 +590,16 @@ if __name__ == "__main__":
         #                 # p.start()
         #                 # p.join()
 
-        # for i in ['./figs']:
-        #     for x in ['', 'enet', 'lasso']:
-        #         for j in [5, 10, 20]:
-        #             data = load_data(otype=n, dd=i, TSTEPS=j)
-        #             for k in ['pca']:
-        #                 print('Running for mskew pred: ', x, n, i, k, j)
-        #                 mskew_pred(data, n, k, j, i, x)
-        #                 # p = multiprocessing.Process(target=mskew_pred, args=(data, n, k, j, i, x))
-        #                 # p.start()
-        #                 # p.join()
+        for i in ['./figs']:
+            for x in ['', 'enet', 'lasso']:
+                for j in [5, 10, 20]:
+                    data = load_data(otype=n, dd=i, TSTEPS=j)
+                    for k in ['pca']:
+                        print('Running for mskew pred: ', x, n, i, k, j)
+                        mskew_pred(data, n, k, j, i, x)
+                        # p = multiprocessing.Process(target=mskew_pred, args=(data, n, k, j, i, x))
+                        # p.start()
+                        # p.join()
 
         for i in ['./figs']:
             for j in [5, 10, 20]:

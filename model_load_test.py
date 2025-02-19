@@ -18,6 +18,7 @@ from pred import MPls
 from pred import NS
 from pred import CT
 from pred import SSVI
+from feature_extraction import VAE, Sampling, VaeRegression, PcaRegression, HarRegression, Encoder, Decoder
 from scipy import stats
 # from blackscholes import BlackScholesCall, BlackScholesPut
 
@@ -407,6 +408,7 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                           (model_name, load_tsteps, t, otype), 'rb') as f:
                     m1 = pickle.load(f)
 
+            vYY = valY[:, :, j]
             mskew = valX[:, :, :, j]
             mskew = mskew.reshape(mskew.shape[0],
                                   mskew.shape[1]*mskew.shape[2])
@@ -420,12 +422,16 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             ts = np.array([t]*mskew.shape[0]).reshape(mskew.shape[0], 1)
             mskew = np.append(mskew, ts, axis=1)
 
-            out[:, :, j] = m1.predict(mskew, TSTEPS, 'skew')
+            # out[:, :, j] = m1.predict(mskew, vYY, TSTEPS, 'skew')
 
             if get_features and model != 'mskvae':
                 if j in TERM:
                     X = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
-                    labels = ['t-%s' % (i+1) for i in range(feature_res)[::-1]]
+                    if model == 'mskhar':
+                        labels = ['lag-20', 'lag-5', 'lag-1']
+                    else:
+                        labels = ['t-%s' % (i+1) for i in range(feature_res)[::-1]]
+
                     import itertools
                     markers = itertools.cycle(('o', '+', '*')) 
                     # markers = [(3+i, 1, 0) for i in range(feature_res)]
@@ -482,6 +488,8 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                 with open('./tskew_feature_models/%s_ts_%s_%s_%s_gfigs.pkl' %
                           (model_name, load_tsteps, m, otype), 'rb') as f:
                     m1 = pickle.load(f)
+
+            vYY = valY[:, j]
             tskew = valX[:, :, j]
             tskew = tskew.reshape(tskew.shape[0],
                                   tskew.shape[1]*tskew.shape[2])
@@ -496,7 +504,7 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
             tskew = np.append(tskew, ms, axis=1)
 
             # XXX: Predict the output
-            out[:, j] = m1.predict(tskew, TSTEPS, 'skew')
+            out[:, j] = m1.predict(tskew, vYY, TSTEPS, 'skew')
 
             # XXX: Features plot
             if get_features and model != 'tskvae':
@@ -504,7 +512,10 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                     X = [i/pred.DAYS
                          for i in range(pred.LT, pred.UT+pred.TSTEP,
                                         pred.TSTEP)]
-                    labels = ['t-%s' % (i+1) for i in range(feature_res)[::-1]]
+                    if model == 'tskhar':
+                        labels = ['lag-1', 'lag-5', 'lag-20']
+                    else:
+                        labels = ['t-%s' % (i+1) for i in range(feature_res)[::-1]]
                     import itertools
                     markers = itertools.cycle(('o', '+', '*', 'x', 'p', '.', '>',
                                                '1', '2', '3', '4', 'd', 's', '<'))
@@ -568,6 +579,7 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                         m1 = pickle.load(f)
 
                 # XXX: Now make the prediction
+                vYY = valY[:, i, j]
                 val_vec = valX[:, :, i, j]
 
                 # # XXX: Extract features before prediction
@@ -579,7 +591,8 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
                 k = np.array([s, t]*val_vec.shape[0]).reshape(val_vec.shape[0], 2)
                 val_vec = np.append(val_vec, k, axis=1)
 
-                out[:, i, j] = m1.predict(val_vec, TSTEPS, 'point')
+                vYY = vYY.reshape(vYY.shape[0], 1)
+                out[:, i, j] = m1.predict(val_vec, vYY, TSTEPS, 'point').reshape(vYY.shape[0],)
 
                 # XXX: Feature vector plot
                 if get_features and model != 'pmvae':
@@ -714,7 +727,7 @@ def main(otype, dd='./figs', model='Ridge', plot=True, TSTEPS=5, NIMAGES=1000,
         #                         type='surf', otype=otype)
 
         # XXX: Predict the output
-        out = m1.predict(valX, TSTEPS, 'surf')
+        out = m1.predict(valX, valY, TSTEPS, 'surf')
         if plot:
             # XXX: Reshape the data for plotting
             out = out.reshape(out.shape[0], MS, TS)
@@ -941,7 +954,7 @@ def overall(fname):
 
 
 def model_v_model(otype):
-    TTS = [5, 10, 20]
+    TTS = [20]
     models = [
         # r'ctridge', r'ctlasso', r'ctenet',
         # r'ssviridge', r'ssvilasso', r'ssvienet',
@@ -960,14 +973,14 @@ def model_v_model(otype):
         # 'pmhar', 'pmlassohar', 'pmenethar',
         # 'tskhar', 'tsklassohar', 'tskenethar',
         # 'mskhar', 'msklassohar', 'mskenethar'
-        'vae', 'mskvae', 'tskvae',
-        'lassovae', 'msklassovae', 'tsklassovae',
-        'enetvae', 'mskenetvae', 'tskenetvae',
-        'pca', 'mskpca', 'tskpca', 'pmpca'
-        'lassopca', 'msklassopca', 'tsklassopca', 'pmlassopca',
-        'enetpca', 'mskenetpca', 'tskenetpca', 'pmenetpca',
+        # 'vae', 'mskvae', 'tskvae',
+        # 'lassovae', 'msklassovae', 'tsklassovae',
+        # 'enetvae', 'mskenetvae', 'tskenetvae',
+        # 'pca', 'mskpca', 'tskpca', 'pmpca',
+        # 'lassopca', 'msklassopca', 'tsklassopca', 'pmlassopca',
+        # 'enetpca', 'mskenetpca', 'tskenetpca', 'pmenetpca',
         # 'har', 
-        # 'mskhar', 
+        'mskhar', 
         # 'pmridge', 
         # 'tskridge'
     ]
@@ -982,17 +995,17 @@ def model_v_model(otype):
                     feature_res = 3
                 dates, y, o = main(otype, plot=False, TSTEPS=t,
                                    model=models[i],
-                                #    feature_res=feature_res,
-                                   get_features=False,
+                                   feature_res=feature_res,
+                                   get_features=True,
                                    dd=dd)
                 # XXX: Save all the results
-                tosave = './final_results/%s_%s_ts_%s_model_%s.npy.gz' % (
-                    otype, dd.split('/')[1], t, models[i])
-                print('Saving result: %s' % tosave)
-                dates = dates.reshape(y.shape[0], 1)
-                res = np.append(dates, y, axis=1)
-                res = np.append(res, o, axis=1)
-                blosc2.save_array(res, tosave, mode='w')
+                # tosave = './final_results/%s_%s_ts_%s_model_%s.npy.gz' % (
+                #     otype, dd.split('/')[1], t, models[i])
+                # print('Saving result: %s' % tosave)
+                # dates = dates.reshape(y.shape[0], 1)
+                # res = np.append(dates, y, axis=1)
+                # res = np.append(res, o, axis=1)
+                # blosc2.save_array(res, tosave, mode='w')
 
 
 def call_dmtest(otype, mmodel, models):
@@ -1117,7 +1130,7 @@ def call_dmtest(otype, mmodel, models):
 def call_timeseries(otype):
     # XXX: This is many models vs many other models
     # model_v_model()
-    lmodels = ['Point-SAM', 'Skew-HAR', 'TS-Ridge', 'Surface-HAR']
+    lmodels = ['Point-SAM', 'MS-HAR', 'TS-Ridge', 'Surface-HAR']
     models = ['pmridge', 'mskhar' , 'tskridge', 'har']
     m1 = ['*', 'P', 'd', '8']
     for dd in ['figs']:
@@ -1445,7 +1458,7 @@ def pttest(y, yhat):
     return pyz, pt, pval
 
 
-def direction(otype, models=['tskridge', 'mskhar']):
+def direction(otype, models=['mskhar']):
     mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
     # XXX: Now go through the TS
     tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
@@ -1521,9 +1534,9 @@ def direction(otype, models=['tskridge', 'mskhar']):
                 shutil.copyfile('./plots/%s' % min_file, '../feature_paper/figs/%s_min_lags_%s_call_figs.pdf' % (model, tstep))
 
 
-                plt.savefig('./plots/dir_score_pval_%s_%s_ts_%s_model_%s.pdf' %
-                            (otype, dd, ts, model), bbox_inches='tight')
-                plt.close(fig)
+                # plt.savefig('./plots/dir_score_pval_%s_%s_ts_%s_model_%s.pdf' %
+                #             (otype, dd, ts, model), bbox_inches='tight')
+                # plt.close(fig)
 
 
 def lag_test(otype):
@@ -1966,16 +1979,15 @@ if __name__ == '__main__':
     plt.style.use('seaborn-v0_8-whitegrid')
 
     # XXX: model vs model
-    for otype in ['call']:
-       model_v_model(otype)
+    # for otype in ['call']:
+    #    model_v_model(otype)
 
-    # XXX: Point ridge models -- Peter add other models here
-    # point_ridge = {'point_ridge': ['pmridge','pmpca', 'pmplsridge', 'pmhar',
-    # 'pmvae']}
+    # # # XXX: Point ridge models -- Peter add other models here
+    # point_ridge = {'point_ridge': ['pmridge','pmpca', 'pmplsridge', 'pmhar']}
     # point_lasso = {'point_lasso': ['pmlasso','pmlassopca', 'pmplslasso',
-    # 'pmlassohar', 'pmlassovae']}
+    # 'pmlassohar']}
     # point_enet = {'point_enet': ['pmenet', 'pmenetpca', 'pmplsenet',
-    # 'pmenethar', 'pmenetvae']}
+    # 'pmenethar']}
 
     # # XXX: Skew models -- Peter add other models here
     # skew_ridge = {'skew_ridge': ['mskridge','mskpca', 'mskplsridge',
@@ -2011,17 +2023,17 @@ if __name__ == '__main__':
     # surf = {'surf_all': ['har', 'plslasso', 'plsenet']}
 
     # XXX: Best models for each feature
-    models = {'best': ['pmridge', 'mskhar', 'tskridge', 'har']}
+    # models = {'best': ['pmridge', 'mskhar', 'tskridge', 'har']}
 
 
-    # for otype in ['call']:
+    for otype in ['call']:
     # # #     #  XXX: Plot the bar graph for overall results
     #     call_overall(otype)
-    # #     #  XXX: Plot the best time series RMSE and MAPE
-        # call_timeseries(otype)
+        #  XXX: Plot the best time series RMSE and MAPE
+        call_timeseries(otype)
 
-    # for otype in ['put']:
-    #     for i in [ models ]:
+    # for otype in ['call']:
+    #     for i in [ point_ridge, point_lasso, point_enet]:
     #         # XXX: DM test across time (RMSE)
     #         model, model_names = list(i.keys())[0], list(i.values())[0]
     #         call_dmtest(otype, model, model_names)
@@ -2052,16 +2064,17 @@ if __name__ == '__main__':
     #         shutil.copyfile('./plots/dir_score_pval_%s_figs_ts_5_model_%s.pdf' % (otype, model), '../feature_paper/figs/dir_score_pval_%s_figs_ts_5_model_%s.pdf' % (otype, model))
 
     # Copying over the timeseries and stacked bar graph
-    # shutil.copyfile('./plots/call_figs_r2_time_series_best_models_5.pdf', '../feature_paper/figs/call_figs_r2_time_series_best_models_5.pdf')
-    # shutil.copyfile('./plots/call_figs_rmse_time_series_best_models_5.pdf', '../feature_paper/figs/call_figs_rmse_time_series_best_models_5.pdf')
+    shutil.copyfile('./plots/call_figs_r2_time_series_best_models_5.pdf', '../feature_paper/figs/call_figs_r2_time_series_best_models_5.pdf')
+    shutil.copyfile('./plots/call_figs_rmse_time_series_best_models_5.pdf', '../feature_paper/figs/call_figs_rmse_time_series_best_models_5.pdf')
 
     # # XXX: Generate latex table for best absolute r2 and rmse results
     # # Copy over best absolute r2 and rmse graphs
-    # for otype in ['call']:
+    # for otype in ['put']:
     #     shutil.copyfile('./plots/%s_figs_r2_avg_models.pdf' % (otype), '../feature_paper/figs/best_abs_r2_%s.pdf' % (otype))
     #     shutil.copyfile('./plots/%s_figs_r2std_avg_models.pdf' % (otype), '../feature_paper/figs/best_abs_r2std_%s.pdf' % (otype))
     #     shutil.copyfile('./plots/%s_figs_rmse_avg_models.pdf' % (otype), '../feature_paper/figs/best_abs_rmse_%s.pdf' % (otype))
     #     shutil.copyfile('./plots/%s_figs_rmsestd_avg_models.pdf' % (otype), '../feature_paper/figs/best_abs_rmsestd_%s.pdf' % (otype))
+
     # # df = pd.read_csv('./plots/call_figs_rmse_r2_avg_std_models_5.csv')
 
     # # columns = ['Index', 'Models', 'RMSE', 'RMSE STD', '$R^2$', '$R^2$ STD']
@@ -2234,16 +2247,18 @@ if __name__ == '__main__':
     #                         columns.remove('\\ac{SSVI}')
     #                         columns.remove('\\ac{ADNS}')
     #                         columns.remove('\\ac{NS}')
+    #                         columns.remove('\\ac{VAE}')
     #                         index.remove('\\ac{SSVI}')
     #                         index.remove('\\ac{ADNS}')
     #                         index.remove('\\ac{NS}')
+    #                         index.remove('\\ac{VAE}')
+
     #                     else:
     #                         columns.remove('\\ac{SSVI}')
     #                         columns.remove('\\ac{ADNS}')
     #                         index.remove('\\ac{SSVI}')
     #                         index.remove('\\ac{ADNS}')
 
-    #                     s.format('{:.1f}', na_rep=" ")
 
     #                     df.columns = columns
     #                     df.index = index
@@ -2255,12 +2270,19 @@ if __name__ == '__main__':
     #                     dfrp.columns = columns
     #                     dfrp.index = index
 
-    #                     # Remove the vae index
-    #                     df = df.drop('\\ac{VAE}', axis=0)
-    #                     dfp = dfp.drop('\\ac{VAE}', axis=0)
+    #                     # Remove the last index 
+    #                     if feature == 'point':
+    #                         df = df.drop('\\ac{HAR}', axis=0)
+    #                         dfp = dfp.drop('\\ac{HAR}', axis=0)
 
-    #                     dfr = dfr.drop('\\ac{VAE}', axis=0)
-    #                     dfrp = dfrp.drop('\\ac{VAE}', axis=0)
+    #                         dfr = dfr.drop('\\ac{HAR}', axis=0)
+    #                         dfrp = dfrp.drop('\\ac{HAR}', axis=0)
+    #                     else:
+    #                         df = df.drop('\\ac{VAE}', axis=0)
+    #                         dfp = dfp.drop('\\ac{VAE}', axis=0)
+
+    #                         dfr = dfr.drop('\\ac{VAE}', axis=0)
+    #                         dfrp = dfrp.drop('\\ac{VAE}', axis=0)
 
 
     #                     # remove the har index if ts != 20

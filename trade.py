@@ -488,12 +488,12 @@ if __name__ == '__main__':
                     trade(dates, y, yp, otype, model, lags=ts)
 
     # XXX: The trading part, only for the best model
-    models = ['har', 'mskhar', 'ridge', 'ssviridge',
-              'plsridge', 'ctridge',
-              'tskridge', 'tskplsridge', 'tsknsridge',
-              'mskridge', 'msknsridge', 'mskplsridge',
-              'pmridge', 'pmplsridge']
-    # models = ['pmridge', 'mskhar', 'tskridge', 'har']
+    # models = ['har', 'mskhar', 'ridge', 'ssviridge',
+    #           'plsridge', 'ctridge',
+    #           'tskridge', 'tskplsridge', 'tsknsridge',
+    #           'mskridge', 'msknsridge', 'mskplsridge',
+    #           'pmridge', 'pmplsridge']
+    models = ['pmridge', 'mskhar', 'tskridge', 'har']
     model_labels = models
     # model_labels = ['Point-SAM', 'MS-HAR', 'TS-SAM', 'Surface-HAR']
     from joblib import Parallel, delayed
