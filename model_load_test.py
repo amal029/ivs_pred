@@ -24,7 +24,7 @@ from scipy import stats
 # from blackscholes import BlackScholesCall, BlackScholesPut
 
 # For plotting style
-import scienceplots
+# import scienceplots
 
 
 def date_to_num(otype, date, dd='./figs'):
@@ -1613,6 +1613,37 @@ def lag_test(otype):
             # print(model, ' DM:', dstatf, dstatpf)
             # print(model, r' R^2: ', r2f, r2pf)
 
+def overall_r2(models, predictor='ridge', otype='call', ftype='pm', dd='figs'):
+    """
+    Gets average r2 for out of sample forecasting for all models
+    outputs csv file
+    """
+    mms = np.arange(pred.LM, pred.UM+pred.MSTEP, pred.MSTEP)
+    # XXX: Now go through the TS
+    tts = [i/pred.DAYS for i in range(pred.LT, pred.UT+pred.TSTEP,
+                                        pred.TSTEP)]
+    MS = len(mms)
+    TS = len(tts)
+
+    TTS = [5, 10, 20]
+    r2df = np.array([0.0]*len(TTS)*len(models)).reshape(len(TTS), len(models))
+    # Loop through TSTEP
+    for i, tstep in enumerate(TTS):
+        # Loop through models
+        for x, m in enumerate(models):
+            # Exception for HAR
+            if 'har' in m:
+                tstep = 20 
+            final_result = './final_results/%s_%s_ts_%s_model_%s.npy.gz' % (otype, dd, tstep, m)
+            data = blosc2.load_array(final_result)
+            y = data[:, 1:MS*TS+1].astype(float, copy=False)
+            yp = data[:, MS*TS+1:].astype(float, copy=False)
+            r2df[i, x] = r2_score(y, yp)
+    
+    header = ','.join(models)
+    np.savetxt('./plots/r_squared/average_r2_%s_%s_%s.csv' % (otype, predictor, ftype), r2df, delimiter=',', header=header)
+
+    
 
 if __name__ == '__main__':
     plt.style.use('seaborn-v0_8-whitegrid')
@@ -1622,38 +1653,42 @@ if __name__ == '__main__':
     #    model_v_model(otype)
 
     # # # XXX: Point ridge models -- Peter add other models here
-    # point_ridge = {'point_ridge': ['pmridge','pmpca', 'pmplsridge', 'pmhar']}
-    # point_lasso = {'point_lasso': ['pmlasso','pmlassopca', 'pmplslasso',
-    # 'pmlassohar']}
-    # point_enet = {'point_enet': ['pmenet', 'pmenetpca', 'pmplsenet',
-    # 'pmenethar']}
+    point_ridge = {'point_ridge': ['pmridge','pmpca', 'pmplsridge', 'pmhar']}
+    point_lasso = {'point_lasso': ['pmlasso','pmlassopca', 'pmplslasso',
+    'pmlassohar']}
+    point_enet = {'point_enet': ['pmenet', 'pmenetpca', 'pmplsenet',
+    'pmenethar']}
 
-    # # XXX: Skew models -- Peter add other models here
-    # skew_ridge = {'skew_ridge': ['mskridge','mskpca', 'mskplsridge',
-    # 'msknsridge', 'mskhar', 'mskvae']}
-    # skew_lasso = {'skew_lasso': ['msklasso','msklassopca', 'mskplslasso',
-    # 'msknslasso', 'msklassohar', 'msklassovae']}
-    # skew_enet = {'skew_enet': ['mskenet', 'mskenetpca', 'mskplsenet',
-    # 'msknsenet', 'mskenethar', 'mskenetvae']}
+    # XXX: Skew models -- Peter add other models here
+    skew_ridge = {'skew_ridge': ['mskridge','mskpca', 'mskplsridge',
+    'msknsridge', 'mskhar', 'mskvae']}
+    skew_lasso = {'skew_lasso': ['msklasso','msklassopca', 'mskplslasso',
+    'msknslasso', 'msklassohar', 'msklassovae']}
+    skew_enet = {'skew_enet': ['mskenet', 'mskenetpca', 'mskplsenet',
+    'msknsenet', 'mskenethar', 'mskenetvae']}
 
-    # # XXX: Term structure models -- Peter add other models here
-    # ts_ridge = {'termstructure_ridge':
-    #             ['tskridge', 'tskpca', 'tskplsridge', 'tsknsridge',
-    # 'tskhar', 'tskvae']}
-    # ts_lasso = {'termstructure_lasso':
-    #             ['tsklasso', 'tsklassopca', 'tskplslasso', 'tsknslasso',
-    # 'tsklassohar', 'tsklassovae']}
-    # ts_enet = {'termstructure_enet':
-    #            ['tskenet', 'tskenetpca', 'tskplsenet', 'tsknsenet',
-    # 'tskenethar', 'tskenetvae']}
+    # XXX: Term structure models -- Peter add other models here
+    ts_ridge = {'termstructure_ridge':
+                ['tskridge', 'tskpca', 'tskplsridge', 'tsknsridge',
+    'tskhar', 'tskvae']}
+    ts_lasso = {'termstructure_lasso':
+                ['tsklasso', 'tsklassopca', 'tskplslasso', 'tsknslasso',
+    'tsklassohar', 'tsklassovae']}
+    ts_enet = {'termstructure_enet':
+               ['tskenet', 'tskenetpca', 'tskplsenet', 'tsknsenet',
+    'tskenethar', 'tskenetvae']}
 
-    # # XXX: Surface models -- Peter add other models here
-    # surf_ridge = {'surf_ridge': ['ridge', 'pca', 'plsridge', 'ctridge',
-    # 'ssviridge', 'har', 'vae']}
-    # surf_lasso = {'surf_lasso': ['lasso', 'lassopca', 'plslasso', 'ctlasso',
-    # 'ssvilasso', 'lassohar', 'lassovae']}
-    # surf_enet = {'surf_enet': ['enet', 'enetpca', 'plsenet', 'ctenet',
-    # 'ssvienet', 'enethar', 'enetvae']}
+    # XXX: Surface models -- Peter add other models here
+    surf_ridge = {'surf_ridge': ['ridge', 'pca', 'plsridge', 'ctridge',
+    'ssviridge', 'har', 'vae']}
+    surf_lasso = {'surf_lasso': ['lasso', 'lassopca', 'plslasso', 'ctlasso',
+    'ssvilasso', 'lassohar', 'lassovae']}
+    surf_enet = {'surf_enet': ['enet', 'enetpca', 'plsenet', 'ctenet',
+    'ssvienet', 'enethar', 'enetvae']}
+
+    ridge_models = [point_ridge, ts_ridge, skew_ridge, surf_ridge]
+    lasso_models = [point_lasso, ts_lasso, skew_lasso, surf_lasso]
+    enet_models = [point_enet, ts_enet, skew_enet, surf_enet]
 
     # XXX: Best models for each regressor
     # point = {'point_all': ['pmridge', 'pmplslasso', 'pmplsenet']}
@@ -1665,11 +1700,11 @@ if __name__ == '__main__':
     # models = {'best': ['pmridge', 'mskhar', 'tskridge', 'har']}
 
 
-    for otype in ['call']:
-    # # #     #  XXX: Plot the bar graph for overall results
-    #     call_overall(otype)
-        #  XXX: Plot the best time series RMSE and MAPE
-        call_timeseries(otype)
+    # for otype in ['call']:
+    # # # #     #  XXX: Plot the bar graph for overall results
+    # #     call_overall(otype)
+    #     #  XXX: Plot the best time series RMSE and MAPE
+    #     call_timeseries(otype)
 
     # for otype in ['call']:
     #     for i in [ point_ridge, point_lasso, point_enet]:
@@ -1701,4 +1736,23 @@ if __name__ == '__main__':
     # for otype in ['put']:
     #     for model in models['best']:
     #         shutil.copyfile('./plots/dir_score_pval_%s_figs_ts_5_model_%s.pdf' % (otype, model), '../feature_paper/figs/dir_score_pval_%s_figs_ts_5_model_%s.pdf' % (otype, model))
+
+    # XXX: Overall R2 big table
+    for otype in ['call', 'put']:
+        for dd in ['figs']:
+            for pred_models in [ridge_models, lasso_models, enet_models]:
+                for i in pred_models:
+                    model, model_names = list(i.keys())[0], list(i.values())[0]
+                    f_type, pred_type = model.split('_') 
+                    if f_type == 'skew':
+                        f_type = 'mskew'
+                    elif f_type == 'termstructure':
+                        f_type = 'tskew'
+                    elif f_type == 'surf':
+                        f_type = 'surf'
+                    else:
+                        f_type == 'point'
+                    
+
+                    overall_r2(model_names, pred_type, otype, f_type, dd)
 
